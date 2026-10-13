@@ -1,0 +1,273 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# The AI tools of the support desk. Each route is one tool: the route id is the tool name, the ai-tool endpoint
+# describes the tool to the model and the steps hold the business rules.
+#
+# The tools tagged "customer" are given to the customer chat agent (see support-desk.yaml), the tools tagged "support"
+# are published to the support staff by the MCP server (quarkus.camel.mcp-server.tags in application.properties).
+#
+# The customer tools only ever act on the orders of the logged-in customer: ChatResource puts the authenticated user
+# into the customerId exchange property and the SQL statements filter by it. The model cannot choose the customer.
+
+- route:
+    id: get_order
+    from:
+      uri: ai-tool:get_order
+      parameters:
+        tags: customer
+        description: Get an order of the customer with its status, delivery date and items
+        parameter.orderId: integer
+        parameter.orderId.description: The order number
+        parameter.orderId.required: true
+        readOnlyHint: true
+      steps:
+        - to: sql:classpath:sql/get-order.sql?outputType=SelectOne
+        - choice:
+            when:
+              - simple: "${body} == null"
+                steps:
+                  - setBody:
+                      simple: "Order ${header.orderId} not found"
+
+- route:
+    id: track_shipment
+    from:
+      uri: ai-tool:track_shipment
+      parameters:
+        tags: customer
+        description: Track the shipment of an order of the customer with the carrier
+        parameter.orderId: integer
+        parameter.orderId.description: The order number
+        parameter.orderId.required: true
+        readOnlyHint: true
+        openWorldHint: true
+      steps:
+        # Only shipments on their way are tracked, get_order tells about the other orders
+        - to: "sql:SELECT tracking_number FROM orders WHERE id = CAST(:#orderId AS INTEGER) AND customer_id = :#${exchangeProperty.customerId} AND status = 'SHIPPED'?outputType=SelectOne"
+        - choice:
+            when:
+              - simple: "${body} == null"
+                steps:
+                  - setBody:
+                      simple: "Order ${header.orderId} is not on its way, get_order tells its status"
+                  - stop: {}
+        - setProperty:
+            name: trackingNumber
+            simple: "${body}"
+        # Only the tracking number leaves the application, none of the headers of the tool call
+        - removeHeaders:
+            pattern: "*"
+        # A slow or failing carrier API must not break the conversation
+        - circuitBreaker:
+            faultToleranceConfiguration:
+              timeoutEnabled: true
+              timeoutDuration: 5000
+            steps:
+              - toD: "{{support-desk.carrier.url}}/shipments/${exchangeProperty.trackingNumber}?httpMethod=GET"
+              - convertBodyTo:
+                  type: String
+            onFallback:
+              steps:
+                - setBody:
+                    constant: The carrier tracking service is not available right now, try again later
+
+- route:
+    id: request_return
+    from:
+      uri: ai-tool:request_return
+      parameters:
+        tags: customer
+        description: >-
+          Request the return of items of a delivered order of the customer, for a refund. Returns are accepted up to
+          30 days after delivery. Refunds up to 50 EUR are approved right away, larger ones are reviewed by the support
+          staff.
+        argSchema: classpath:schemas/request-return.json
+      steps:
+        # PostgreSQL gets the requested items as JSON
+        - setBody:
+            header: items
+        - marshal:
+            json: {}
+        - setProperty:
+            name: items
+            simple: "${bodyAs(String)}"
+        - to: sql:classpath:sql/check-return.sql?outputType=SelectOne
+        # The return rules
+        - choice:
+            when:
+              - simple: "${body} == null"
+                steps:
+                  - setBody:
+                      simple: "Order ${header.orderId} not found"
+                  - stop: {}
+              - simple: "${body[delivered]} != true"
+                steps:
+                  - setBody:
+                      simple: "Order ${header.orderId} has not been delivered yet and cannot be returned"
+                  - stop: {}
+              - simple: "${body[daysSinceDelivery]} > 30"
+                steps:
+                  - setBody:
+                      simple: "Order ${header.orderId} was delivered more than 30 days ago, it can no longer be returned"
+                  - stop: {}
+              - simple: "${body[itemsOnOrder]} != true"
+                steps:
+                  - setBody:
+                      simple: "The requested items or quantities are not part of order ${header.orderId}"
+                  - stop: {}
+              - simple: "${body[amount]} <= 50"
+                steps:
+                  - setProperty:
+                      name: status
+                      constant: APPROVED
+            otherwise:
+              steps:
+                - setProperty:
+                    name: status
+                    constant: PENDING_APPROVAL
+        - setProperty:
+            name: amount
+            simple: "${body[amount]}"
+        - to: sql:classpath:sql/insert-return.sql?outputType=SelectOne
+        - choice:
+            when:
+              - simple: "${body} == null"
+                steps:
+                  - setBody:
+                      simple: "Order ${header.orderId} already has a return"
+              - simple: "${exchangeProperty.status} == 'APPROVED'"
+                steps:
+                  - setProperty:
+                      name: returnId
+                      simple: "${body}"
+                  # The refund route takes it from here. Only the return id is published, none of the headers of the
+                  # tool call.
+                  - removeHeaders:
+                      pattern: "*"
+                  - to: kafka:returns.approved
+                  - setBody:
+                      simple: "Return ${exchangeProperty.returnId} approved, the refund of ${exchangeProperty.amount} EUR is on its way"
+            otherwise:
+              steps:
+                - setBody:
+                    simple: "Return ${body} of ${exchangeProperty.amount} EUR created, it waits for the approval of the support staff"
+
+- route:
+    id: escalate_to_human
+    from:
+      uri: ai-tool:escalate_to_human
+      parameters:
+        tags: customer
+        description: >-
+          Hand the conversation over to a human support engineer by opening a ticket. Use it when the customer asks for
+          a human or when the other tools cannot solve the problem.
+        parameter.summary: string
+        parameter.summary.description: A short summary of the problem for the support engineer
+        parameter.summary.required: true
+        parameter.priority: string
+        parameter.priority.description: How urgent the problem is
+        parameter.priority.enum: LOW,MEDIUM,HIGH,URGENT
+        parameter.priority.required: true
+      steps:
+        - to: sql:classpath:sql/open-ticket.sql?outputType=SelectOne
+        - setProperty:
+            name: ticketId
+            simple: "${body[ticketId]}"
+        # The support team is notified over Kafka. Only the ticket is published, none of the headers of the tool call.
+        - setBody:
+            simple: "${body[event]}"
+        - removeHeaders:
+            pattern: "*"
+        - to: kafka:tickets.escalated
+        - setBody:
+            simple: "Ticket ${exchangeProperty.ticketId} opened, a support engineer will contact the customer by email"
+
+- route:
+    id: list_pending_returns
+    from:
+      uri: ai-tool:list_pending_returns
+      parameters:
+        tags: support
+        description: List the returns that wait for approval, with their order and customer
+        readOnlyHint: true
+        # Published to MCP clients as true when unset, as the MCP specification defines
+        openWorldHint: false
+      steps:
+        - to: sql:classpath:sql/list-pending-returns.sql?outputType=SelectOne
+
+- route:
+    id: decide_return
+    from:
+      uri: ai-tool:decide_return
+      parameters:
+        tags: support
+        description: Approve or reject a return that waits for approval. Approved returns are refunded automatically.
+        parameter.returnId: integer
+        parameter.returnId.description: The id of the return, as listed by list_pending_returns
+        parameter.returnId.required: true
+        parameter.decision: string
+        parameter.decision.enum: approve,reject
+        parameter.decision.required: true
+        parameter.note: string
+        parameter.note.description: Why the return is approved or rejected
+        destructiveHint: true
+        idempotentHint: true
+      steps:
+        - choice:
+            when:
+              - simple: "${header.decision} == 'approve'"
+                steps:
+                  - setProperty:
+                      name: status
+                      constant: APPROVED
+              - simple: "${header.decision} == 'reject'"
+                steps:
+                  - setProperty:
+                      name: status
+                      constant: REJECTED
+            otherwise:
+              steps:
+                - setBody:
+                    constant: The decision must be approve or reject
+                - stop: {}
+        # Only a pending return changes: deciding again, or deciding an unknown return, changes nothing. The note is cut
+        # to the size of its column.
+        - to: "sql:UPDATE returns SET status = :#${exchangeProperty.status}, note = LEFT(:#${header.note}, 500) WHERE id = CAST(:#returnId AS INTEGER) AND status = 'PENDING_APPROVAL'"
+        - choice:
+            when:
+              - simple: "${header.CamelSqlUpdateCount} == 0"
+                steps:
+                  - setBody:
+                      simple: "Return ${header.returnId} does not wait for approval, nothing changed"
+              - simple: "${exchangeProperty.status} == 'APPROVED'"
+                steps:
+                  - setProperty:
+                      name: returnId
+                      simple: "${header.returnId}"
+                  # The refund route takes it from here
+                  - setBody:
+                      simple: "${exchangeProperty.returnId}"
+                  - removeHeaders:
+                      pattern: "*"
+                  - to: kafka:returns.approved
+                  - setBody:
+                      simple: "Return ${exchangeProperty.returnId} approved, the customer will be refunded"
+            otherwise:
+              steps:
+                - setBody:
+                    simple: "Return ${header.returnId} rejected"

@@ -16,7 +16,8 @@
 # limitations under the License.
 #
 
-# Starts the two specialist agents and the orchestrator in dev mode, each in its own JVM.
+# Starts the two specialist agents, the orchestrator and the support desk in dev mode, each in its own JVM.
+# The support desk needs Docker or Podman, for the PostgreSQL and Kafka started by Dev Services.
 # Logs go to <module>.log and process ids to <module>.pid. Stop everything with ./stop.sh
 
 if [ -z "$OPENAI_API_KEY" ]; then
@@ -24,11 +25,11 @@ if [ -z "$OPENAI_API_KEY" ]; then
   echo "non-empty value when OPENAI_BASE_URL points to a local model server, see the README" >&2
 fi
 
-for module in billing-agent technical-agent orchestrator; do
+for module in billing-agent technical-agent orchestrator support-desk; do
   echo "starting $module"
-  # -Ddebug=false: the three dev mode processes would otherwise compete for the same debugger port
+  # -Ddebug=false: the dev mode processes would otherwise compete for the same debugger port
   mvn -f $module/pom.xml quarkus:dev -Ddebug=false > $module.log 2>&1 &
   echo "$!" > $module.pid
 done
 
-echo "logs: billing-agent.log technical-agent.log orchestrator.log"
+echo "logs: billing-agent.log technical-agent.log orchestrator.log support-desk.log"

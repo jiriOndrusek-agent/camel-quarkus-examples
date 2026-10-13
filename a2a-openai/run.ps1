@@ -16,7 +16,8 @@
 #
 
 # Windows counterpart of run.sh.
-# Starts the two specialist agents and the orchestrator in dev mode, each in its own JVM.
+# Starts the two specialist agents, the orchestrator and the support desk in dev mode, each in its own JVM.
+# The support desk needs Docker or Podman, for the PostgreSQL and Kafka started by Dev Services.
 # Logs go to <module>.log and process ids to <module>.pid. Stop everything with .\stop.ps1
 
 Set-Location $PSScriptRoot
@@ -26,13 +27,13 @@ if (-not $env:OPENAI_API_KEY) {
         "non-empty value when OPENAI_BASE_URL points to a local model server, see the README")
 }
 
-foreach ($module in 'billing-agent', 'technical-agent', 'orchestrator') {
+foreach ($module in 'billing-agent', 'technical-agent', 'orchestrator', 'support-desk') {
     Write-Host "starting $module"
     # cmd.exe runs mvn.cmd and sends stdout and stderr to the same log file, as run.sh does.
-    # -Ddebug=false: the three dev mode processes would otherwise compete for the same debugger port
+    # -Ddebug=false: the dev mode processes would otherwise compete for the same debugger port
     $process = Start-Process -FilePath cmd.exe -WindowStyle Hidden -PassThru `
         -ArgumentList '/c', "mvn -f $module\pom.xml quarkus:dev -Ddebug=false > $module.log 2>&1"
     Set-Content -Path "$module.pid" -Value $process.Id
 }
 
-Write-Host "logs: billing-agent.log technical-agent.log orchestrator.log"
+Write-Host "logs: billing-agent.log technical-agent.log orchestrator.log support-desk.log"

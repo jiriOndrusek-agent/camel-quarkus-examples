@@ -18,7 +18,7 @@
 
 # Stops the processes started by ./run.sh and removes the pid files. The log files are kept.
 
-for module in orchestrator technical-agent billing-agent; do
+for module in support-desk orchestrator technical-agent billing-agent; do
   if [ -f $module.pid ]; then
     echo "stopping $module"
     kill $(cat $module.pid) && rm $module.pid

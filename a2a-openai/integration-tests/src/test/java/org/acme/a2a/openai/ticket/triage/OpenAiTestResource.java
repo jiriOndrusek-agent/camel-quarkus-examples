@@ -42,8 +42,8 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 
 /**
- * Configures the application under test: the orchestrator and both specialist agents run together in the test
- * application, and the OpenAI API is either simulated or real.
+ * Configures the application under test: the orchestrator, both specialist agents and the support desk run together
+ * in the test application, and the OpenAI API is either simulated or real.
  * <ul>
  * <li>By default the OpenAI API is simulated by WireMock, using the stub mappings in
  * {@code src/test/resources/mappings}. No network access or API key is needed.</li>
@@ -114,6 +114,7 @@ public class OpenAiTestResource implements QuarkusTestResourceLifecycleManager {
         } else {
             LOG.info("Simulating the OpenAI API with WireMock");
             config.put("camel.component.openai.api-key", "not-a-real-key");
+            config.put("support-desk.llm.api-key", "not-a-real-key");
             // Simulate an outage of the LLM provider for one specific ticket
             wireMock.stubFor(post(urlPathEqualTo("/chat/completions"))
                     .withRequestBody(containing(OUTAGE_SUBJECT))
@@ -121,6 +122,7 @@ public class OpenAiTestResource implements QuarkusTestResourceLifecycleManager {
         }
 
         config.put("camel.component.openai.base-url", wireMock.baseUrl());
+        config.put("support-desk.llm.base-url", wireMock.baseUrl());
         return config;
     }
 

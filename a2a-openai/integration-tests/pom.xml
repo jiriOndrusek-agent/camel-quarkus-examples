@@ -30,10 +30,10 @@
     <artifactId>camel-quarkus-examples-a2a-openai-integration-tests</artifactId>
 
     <name>Camel Quarkus :: Examples :: A2A Support Ticket Triage with OpenAI :: Integration Tests</name>
-    <description>Runs the orchestrator and the specialist agents together in one application and tests them end to end</description>
+    <description>Runs the orchestrator, the specialist agents and the support desk together in one application and tests them end to end</description>
 
     <dependencies>
-        <!-- The three applications under test -->
+        <!-- The applications under test -->
         <dependency>
             <groupId>org.apache.camel.quarkus.examples</groupId>
             <artifactId>camel-quarkus-examples-a2a-openai-orchestrator</artifactId>
@@ -49,6 +49,11 @@
             <artifactId>camel-quarkus-examples-a2a-openai-technical-agent</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>org.apache.camel.quarkus.examples</groupId>
+            <artifactId>camel-quarkus-examples-a2a-openai-support-desk</artifactId>
+            <version>${project.version}</version>
+        </dependency>
 
         <!-- Test -->
         <dependency>
@@ -59,6 +64,17 @@
         <dependency>
             <groupId>io.rest-assured</groupId>
             <artifactId>rest-assured</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkiverse.mcp</groupId>
+            <artifactId>quarkus-mcp-server-test</artifactId>
+            <version>${quarkus-mcp-server.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -75,11 +91,11 @@
                 <groupId>${quarkus.platform.group-id}</groupId>
                 <artifactId>quarkus-maven-plugin</artifactId>
                 <configuration>
-                    <!-- This module assembles the three applications into one, so their application.properties are
+                    <!-- This module assembles the applications into one, so their application.properties are
                          merged with an undefined precedence for keys that several of them define. Build time settings
-                         that must cover all three are therefore set explicitly here. -->
+                         that must cover all of them are therefore set explicitly here. -->
                     <systemProperties>
-                        <quarkus.native.resources.includes>cards/*.json,prompts/*.txt</quarkus.native.resources.includes>
+                        <quarkus.native.resources.includes>cards/*.json,prompts/*.txt,schemas/*.json,sql/*.sql</quarkus.native.resources.includes>
                     </systemProperties>
                 </configuration>
             </plugin>
@@ -111,6 +127,19 @@
                     </plugin>
                 </plugins>
             </build>
+        </profile>
+
+        <profile>
+            <!-- The support desk needs PostgreSQL and Kafka, started by Dev Services in containers -->
+            <id>skip-testcontainers-tests</id>
+            <activation>
+                <property>
+                    <name>skip-testcontainers-tests</name>
+                </property>
+            </activation>
+            <properties>
+                <skipTests>true</skipTests>
+            </properties>
         </profile>
 
         <profile>

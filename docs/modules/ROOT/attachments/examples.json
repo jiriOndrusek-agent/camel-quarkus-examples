@@ -1,7 +1,7 @@
 [
   {
     "title": "A2A Support Ticket Triage with OpenAI",
-    "description": "Shows how to build an AI agent that triages customer support tickets with OpenAI and delegates them to specialist agents using the Agent-to-Agent (A2A) protocol",
+    "description": "Shows how to build an AI agent that triages customer support tickets with OpenAI and delegates them to specialist agents using the Agent-to-Agent (A2A) protocol, and how to serve Camel routes as AI tools to a customer chat agent and, over MCP, to the support staff",
     "link": "https://github.com/apache/camel-quarkus-examples/tree/main/a2a-openai"
   },
   {

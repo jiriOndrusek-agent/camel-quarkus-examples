@@ -1,0 +1,128 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# The customer chat: ChatResource sends the customer's message with the authenticated user in the customerId
+# exchange property.
+- route:
+    id: chat
+    from:
+      uri: direct:chat
+      steps:
+        # One message at a time per customer: a second concurrent message is rejected (HTTP 429)
+        - throttle:
+            constant: 1
+            mode: ConcurrentRequests
+            correlationExpression:
+              exchangeProperty: customerId
+            rejectExecution: true
+        - setHeader:
+            name: CamelLangChain4jAgentSystemMessage
+            simple: "resource:classpath:prompts/support-agent.txt"
+        # Each customer has their own conversation memory
+        - setHeader:
+            name: CamelLangChain4jAgentMemoryId
+            exchangeProperty: customerId
+        # The agent gets the ai-tool routes tagged "customer" as tools, see tools.yaml
+        - to: langchain4j-agent:support?agentConfiguration=#supportAgentConfiguration&tags=customer
+
+# Refunds approved returns. Refunds are not a tool: no model decides about money leaving the company, the route
+# acts on the returns approved by the rules of request_return or by the support staff with decide_return.
+- route:
+    id: refund
+    # A failed payment call is retried: the idempotency key makes sure that the customer is not paid twice
+    errorHandler:
+      defaultErrorHandler:
+        redeliveryPolicy:
+          maximumRedeliveries: 5
+          redeliveryDelay: 2000
+    from:
+      uri: kafka:returns.approved
+      parameters:
+        groupId: support-desk-refunds
+        autoOffsetReset: earliest
+      steps:
+        - setProperty:
+            name: returnId
+            simple: "${body}"
+        # Only an approved return is refunded, a duplicate message finds it refunded already and is ignored
+        - to: "sql:SELECT amount FROM returns WHERE id = CAST(:#${exchangeProperty.returnId} AS INTEGER) AND status = 'APPROVED'?outputType=SelectOne"
+        - filter:
+            simple: "${body} != null"
+            steps:
+              - removeHeaders:
+                  pattern: "*"
+              - setHeader:
+                  name: Content-Type
+                  constant: application/json
+              # The payment provider does not pay twice for the same idempotency key
+              - setHeader:
+                  name: Idempotency-Key
+                  simple: "return-${exchangeProperty.returnId}"
+              - setBody:
+                  simple: '{"reference": "return-${exchangeProperty.returnId}", "amount": ${body}, "currency": "EUR"}'
+              - to: "{{support-desk.payment.url}}/refunds?httpMethod=POST"
+              - to: "sql:UPDATE returns SET status = 'REFUNDED' WHERE id = CAST(:#${exchangeProperty.returnId} AS INTEGER) AND status = 'APPROVED'"
+              - log: "Return ${exchangeProperty.returnId} refunded"
+
+# The returns of the customer, for ChatResource
+- route:
+    id: customer-returns
+    from:
+      uri: direct:customer-returns
+      steps:
+        - to:
+            uri: >-
+              sql:SELECT CAST(COALESCE(json_agg(json_build_object('returnId', id, 'orderId', order_id, 'amount', amount,
+              'status', status) ORDER BY id), '[]') AS TEXT) FROM returns
+              WHERE customer_id = :#${exchangeProperty.customerId}?outputType=SelectOne
+
+# The latest tool calls, for AdminResource
+- route:
+    id: tool-audit-log
+    from:
+      uri: direct:tool-audit-log
+      steps:
+        - to:
+            uri: >-
+              sql:SELECT CAST(COALESCE(json_agg(json_build_object('tool', tool, 'caller', caller, 'outcome', outcome,
+              'calledAt', called_at) ORDER BY id DESC), '[]') AS TEXT)
+              FROM (SELECT * FROM tool_audit ORDER BY id DESC LIMIT 100) AS latest?outputType=SelectOne
+
+# Stand-ins for the carrier and the payment provider APIs, so that the example runs without accounts. Point
+# support-desk.carrier.url and support-desk.payment.url at the real APIs instead.
+- route:
+    id: fake-carrier
+    from:
+      uri: platform-http:/fake/carrier/shipments/{trackingNumber}
+      parameters:
+        httpMethodRestrict: GET
+        produces: application/json
+      steps:
+        - setBody:
+            simple: '{"trackingNumber": "${header.trackingNumber}", "status": "IN_TRANSIT", "estimatedDelivery": "${date:now+48h:yyyy-MM-dd}"}'
+
+- route:
+    id: fake-payments
+    from:
+      uri: platform-http:/fake/payments/refunds
+      parameters:
+        httpMethodRestrict: POST
+        produces: application/json
+      steps:
+        - log: "Refund ${header.Idempotency-Key} accepted"
+        - setBody:
+            simple: '{"refundId": "${uuid}", "status": "ACCEPTED"}'

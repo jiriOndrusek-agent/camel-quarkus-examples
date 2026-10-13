@@ -20,7 +20,7 @@
 
 Set-Location $PSScriptRoot
 
-foreach ($module in 'orchestrator', 'technical-agent', 'billing-agent') {
+foreach ($module in 'support-desk', 'orchestrator', 'technical-agent', 'billing-agent') {
     if (Test-Path "$module.pid") {
         Write-Host "stopping $module"
         # /T kills the whole tree: cmd.exe, the Maven JVM and the forked dev mode JVM
