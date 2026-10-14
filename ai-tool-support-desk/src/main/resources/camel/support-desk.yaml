@@ -1,0 +1,225 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# The customer chat: ChatResource sends the customer's message with the authenticated user in the customerId
+# exchange property.
+- route:
+    id: chat
+    # No error handler: ChatResource turns a failure into the HTTP response, for example HTTP 429 for a second message
+    errorHandler:
+      noErrorHandler: {}
+    from:
+      uri: direct:chat
+      steps:
+        # One message at a time per customer: a second concurrent message is rejected (HTTP 429)
+        - throttle:
+            expression:
+              constant:
+                expression: "1"
+            mode: ConcurrentRequests
+            correlationExpression:
+              exchangeProperty:
+                expression: customerId
+            rejectExecution: true
+        - setHeader:
+            name: CamelLangChain4jAgentSystemMessage
+            expression:
+              simple:
+                expression: "resource:classpath:prompts/support-agent.txt"
+        # Each customer has their own conversation memory
+        - setHeader:
+            name: CamelLangChain4jAgentMemoryId
+            expression:
+              exchangeProperty:
+                expression: customerId
+        # The agent gets the ai-tool routes tagged "customer" as tools, see tools.yaml, and may make at most 5 rounds of
+        # tool calls to answer one message
+        - to:
+            uri: langchain4j-agent:support
+            parameters:
+              agentConfiguration: "#supportAgentConfiguration"
+              tags: customer
+              maxToolCallingRoundTrips: 5
+
+# Hands the approved returns over to the refund route through Kafka. The returns table is the source of truth: a return
+# counts as dispatched once its message is sent, and is sent again when it is still not refunded after
+# support-desk.refunds.retry-after-seconds, for example because the payment provider was down. So no approved return is
+# forgotten, even when a refund or a Kafka message fails.
+- route:
+    id: refund-dispatcher
+    from:
+      uri: >-
+        sql:SELECT id FROM returns WHERE status = 'APPROVED' AND (dispatched_at IS NULL
+        OR dispatched_at < now() - INTERVAL '{{support-desk.refunds.retry-after-seconds}} seconds')
+      parameters:
+        delay: "1000"
+      steps:
+        - setBody:
+            expression:
+              simple:
+                expression: "${body[id]}"
+        # The return id is the message key, so all messages about a return go to the same partition, where the refund
+        # route handles them one after the other
+        - setHeader:
+            name: CamelKafkaKey
+            expression:
+              simple:
+                expression: "${body}"
+        - to:
+            uri: kafka:returns.approved
+        - to:
+            uri: sql:UPDATE returns SET dispatched_at = now() WHERE id = :#${body}
+
+# The errors of the refund route. A refund that fails because the payment provider is down or asks to try later (HTTP
+# 5xx, 408 or 429) is tried 3 more times, and later again by the refund-dispatcher route. A refund that the payment
+# provider refuses for good (any other HTTP 4xx) would be refused again: the return is parked as REFUND_FAILED, which
+# list_pending_returns shows to the support staff.
+- routeConfiguration:
+    id: refund
+    errorHandler:
+      defaultErrorHandler:
+        redeliveryPolicy:
+          maximumRedeliveries: 3
+          redeliveryDelay: "1000"
+    onException:
+      - onException:
+          exception:
+            - org.apache.camel.http.base.HttpOperationFailedException
+          onWhen:
+            expression:
+              simple:
+                expression: "${exception.statusCode} >= 400 && ${exception.statusCode} < 500 && ${exception.statusCode} !in '408,429'"
+          handled:
+            constant:
+              expression: "true"
+          steps:
+            - to:
+                uri: >-
+                  sql:UPDATE returns SET status = 'REFUND_FAILED' WHERE id = CAST(:#${exchangeProperty.returnId} AS INTEGER)
+                  AND status = 'APPROVED'
+            - log:
+                loggingLevel: WARN
+                message: "The payment provider refused the refund of return ${exchangeProperty.returnId} with HTTP ${exception.statusCode}"
+
+# Refunds approved returns. Refunds are not a tool: no model decides about money leaving the company, the route acts on
+# the returns approved by the rules of request_return or by the support staff with decide_return.
+- route:
+    id: refund
+    routeConfigurationId: refund
+    from:
+      uri: kafka:returns.approved
+      parameters:
+        groupId: support-desk-refunds
+        autoOffsetReset: earliest
+      steps:
+        - setProperty:
+            name: returnId
+            expression:
+              simple:
+                expression: "${body}"
+        # An idempotent consumer: the status of the return records whether it was refunded, so a repeated message finds
+        # the return refunded already and is skipped
+        - to:
+            uri: >-
+              sql:SELECT amount FROM returns WHERE id = CAST(:#${exchangeProperty.returnId} AS INTEGER)
+              AND status = 'APPROVED'
+            parameters:
+              outputType: SelectOne
+        - filter:
+            expression:
+              simple:
+                expression: "${body} != null"
+            steps:
+              - removeHeaders:
+                  pattern: "*"
+              - setHeader:
+                  name: Content-Type
+                  expression:
+                    constant:
+                      expression: application/json
+              # The payment provider pays at most once per idempotency key, so a retried call never pays twice
+              - setHeader:
+                  name: Idempotency-Key
+                  expression:
+                    simple:
+                      expression: "return-${exchangeProperty.returnId}"
+              - setBody:
+                  expression:
+                    simple:
+                      expression: '{"reference": "return-${exchangeProperty.returnId}", "amount": ${body}, "currency": "EUR"}'
+              - to:
+                  uri: "{{support-desk.payment.url}}/refunds"
+                  parameters:
+                    httpMethod: POST
+              - to:
+                  uri: >-
+                    sql:UPDATE returns SET status = 'REFUNDED' WHERE id = CAST(:#${exchangeProperty.returnId} AS INTEGER)
+                    AND status = 'APPROVED'
+              - log:
+                  message: "Return ${exchangeProperty.returnId} refunded"
+
+# Announces the tickets opened by escalate_to_human to the ticketing system of the support team, on the Kafka topic
+# tickets.escalated. A ticket counts as announced once its message is sent: when the send fails, the next poll tries
+# again, so the ticketing system gets each ticket at least once.
+- route:
+    id: ticket-dispatcher
+    from:
+      uri: sql:classpath:sql/unannounced-tickets.sql
+      parameters:
+        delay: "1000"
+      steps:
+        - setProperty:
+            name: ticketId
+            expression:
+              simple:
+                expression: "${body[id]}"
+        - setBody:
+            expression:
+              simple:
+                expression: "${body[event]}"
+        - to:
+            uri: kafka:tickets.escalated
+        - to:
+            uri: sql:UPDATE tickets SET announced_at = now() WHERE id = :#${exchangeProperty.ticketId}
+
+# The returns of the customer, for ChatResource
+- route:
+    id: customer-returns
+    from:
+      uri: direct:customer-returns
+      steps:
+        - to:
+            uri: >-
+              sql:SELECT CAST(COALESCE(json_agg(json_build_object('returnId', id, 'orderId', order_id, 'amount', amount,
+              'status', status) ORDER BY id), '[]') AS TEXT) FROM returns
+              WHERE customer_id = :#${exchangeProperty.customerId}
+            parameters:
+              outputType: SelectOne
+
+# The latest tool calls, for AdminResource
+- route:
+    id: tool-audit-log
+    from:
+      uri: direct:tool-audit-log
+      steps:
+        - to:
+            uri: >-
+              sql:SELECT CAST(COALESCE(json_agg(json_build_object('tool', tool, 'caller', caller, 'outcome', outcome,
+              'calledAt', called_at) ORDER BY id DESC), '[]') AS TEXT)
+              FROM (SELECT * FROM tool_audit ORDER BY id DESC LIMIT 100) AS latest
+            parameters:
+              outputType: SelectOne

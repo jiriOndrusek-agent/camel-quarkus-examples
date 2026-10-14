@@ -1,0 +1,302 @@
+= AI Tool Support Desk with LangChain4j and MCP: A Camel Quarkus example
+:cq-example-description: An example that shows how to serve Camel routes as AI tools to a LangChain4j agent and, over MCP, to the AI assistant of the support staff
+
+{cq-description}
+
+TIP: Check the https://camel.apache.org/camel-quarkus/latest/first-steps.html[Camel Quarkus User guide] for prerequisites
+and other general information.
+
+== What the example does
+
+The support desk of an online shop. Customers chat with an AI assistant about their orders, and the support staff
+use an AI assistant of their own, for example Claude Code, over the Model Context Protocol (MCP). Both assistants call
+the same Camel routes as tools:
+
+* The `ai-tool` component (`camel-quarkus-ai-tool`) turns a Camel route into a tool that an AI model can call. The tool
+  routes are in `src/main/resources/camel/tools.yaml`, and their tags tell the two audiences apart.
+* Customers chat at `POST /support/chat`. The `chat` route calls the `langchain4j-agent` component
+  (`camel-quarkus-langchain4j-agent`) with `tags=customer`, so the model gets the customer tools.
+* The `camel-quarkus-mcp-server` extension publishes the tools tagged `support` at `/mcp`.
+
+[cols="2,1,6"]
+|===
+| Tool | Tag | What it does
+
+| `get_order`
+| customer
+| Reads an order of the customer with its items from PostgreSQL. Read only.
+
+| `track_shipment`
+| customer
+| Asks the carrier API about an order on its way, in a circuit breaker. Read only, talks to an external system.
+
+| `request_return`
+| customer
+| For verified customers. Checks that the items are part of a delivered order of the customer, delivered at most 30
+  days ago. A refund of up to 50 EUR is approved right away, a larger one waits for the support staff. The items to
+  return are nested arguments, described by the JSON schema in `schemas/request-return.json`.
+
+| `escalate_to_human`
+| customer
+| For verified customers. Opens a ticket with a summary and a priority, which the `ticket-dispatcher` route announces to
+  the ticketing system of the support team on the Kafka topic `tickets.escalated`.
+
+| `list_pending_returns`
+| support
+| Lists the returns that need the support staff, with their order, items and customer: those waiting for approval, and
+  those parked because the payment provider refused their refund. Read only.
+
+| `decide_return`
+| support
+| Approves or rejects a pending return. Destructive and idempotent: deciding again changes nothing.
+|===
+
+In each route, the route id is the tool name, the endpoint options describe the tool to the model (`description`,
+`parameter.*` or `argSchema`, and MCP hints such as `readOnlyHint`) and the steps hold the business rules. The model
+only decides which tool to call with which arguments. In particular, it cannot:
+
+* Choose the customer. `ChatResource` takes the customer from the authenticated user and hands it to the routes in the
+  `customerId` exchange property, and the SQL statements filter by it. The model never sees the orders of another
+  customer.
+* Act for a customer who may not. The `authorizationPolicy` of the write tools, `VerifiedCustomerPolicy`, only lets
+  verified customers call them. It decides on the exchange properties that `ChatResource` sets from the authenticated
+  user, never on the arguments chosen by the model, and a denied call never runs the route: the model only learns that
+  it is not authorized.
+* Refund. Refunding is not a tool. The `refund-dispatcher` route picks the approved returns from the database and
+  sends them to the Kafka topic `returns.approved`, keyed by return, where the `refund` route calls the payment
+  provider and marks the return `REFUNDED`. The refund route is an idempotent consumer: the status of the return
+  records whether it was refunded, so a repeated message is skipped, and the payment provider gets the same
+  idempotency key for each call, so the customer is never paid twice. A failed call (no answer, or HTTP 5xx, 408 or
+  429) is retried 3 times, and a return that is still not refunded after a minute is sent again. A refund that the
+  payment provider refuses for good (any other HTTP 4xx) is not tried again: the return is parked as `REFUND_FAILED`,
+  and `list_pending_returns` shows it to the support staff, who settle it outside the tools, for example with the
+  payment provider. So no approved return is forgotten.
+* Run away. A customer has one message in progress at most (another one gets HTTP 429), the model gets at most 5 rounds
+  of tool calls per message (`maxToolCallingRoundTrips` of the `langchain4j-agent` endpoint), a failing tool only
+  tells it `Tool execution failed`, never the cause, and a tool it does not have tells it that the tool is not
+  available. When the model still asks for tools after 5 rounds, the agent gives up: the customer gets HTTP 502 with a
+  reply that says so, although the tool calls of the 5 rounds ran, for example a return may have been requested.
+  `SupportAgentConfiguration` reports failing tools with a tool error handler rather than `compensateOnToolErrors`,
+  which undoes the tools that ran before with their `@CompensateFor` methods, which ai-tool routes do not have.
+* Feed the assistant of the support staff with text written by customers, which could carry instructions to it. The
+  reason of a return is one of a few codes, and `list_pending_returns` names the items after the catalog.
+
+For the operations team, every tool call is recorded in the `tool_audit` table with the tool, the caller and the
+outcome, `OK`, `FAILED`, or `DENIED` by the authorization policy (from the `AiToolAuthorizationDeniedEvent`), but
+without the arguments, which may contain personal data. `GET /admin/audit`
+lists the latest calls. Each tool also has a kill switch: `POST /admin/tools/{tool}/disable` stops the route of the
+tool, which removes it from the chat agent and from the MCP server, until `POST /admin/tools/{tool}/enable` or a
+restart of the application.
+
+In dev mode, the users are demo users with HTTP basic authentication, whose password is their user name: `alice` and
+`bob` are verified customers, `dave` is a customer who has not verified their account, and `carol` is support staff.
+The PostgreSQL schema is in `src/main/resources/db/schema.sql`, and the demo customers, orders and returns are in
+`src/main/resources/db/demo-data.sql`. The carrier, the payment provider and the ticketing system of the support team
+are stand-ins, see `src/main/resources/camel-dev/stand-ins.yaml`.
+
+== Prerequisites
+
+The chat needs a model that can call tools. By default, the example uses
+https://ollama.com/library/granite4.1:3b[granite4.1:3b] served by https://ollama.com/[Ollama] on your machine. Start
+Ollama in a container (or install it) and pull the model:
+
+[source,shell]
+----
+docker run --rm -d -v cqex-ai-tool-support-desk-ollama:/root/.ollama -p 11434:11434 --name cqex-ai-tool-support-desk-ollama ollama/ollama:0.24.0
+docker exec cqex-ai-tool-support-desk-ollama ollama pull granite4.1:3b
+----
+
+To use another server with an OpenAI compatible API, for example OpenAI itself, set the `SUPPORT_DESK_LLM_BASE_URL`,
+`SUPPORT_DESK_LLM_MODEL` and `SUPPORT_DESK_LLM_API_KEY` environment variables. Small models are slower, and more
+likely to call a wrong tool or to promise things the tools did not confirm.
+
+Dev mode and the tests also need Docker or Podman: Dev Services start PostgreSQL, with the demo orders, and Kafka.
+
+== Start in Development mode
+
+[source,shell]
+----
+mvn clean compile quarkus:dev
+----
+
+The above command compiles the project, starts the application and lets the Quarkus tooling watch for changes in your
+workspace. Any modifications in your project will automatically take effect in the running application.
+
+TIP: Please refer to the Development mode section of
+https://camel.apache.org/camel-quarkus/latest/first-steps.html#_development_mode[Camel Quarkus User guide] for more details.
+
+=== Chat with the support desk
+
+Customers chat with the support assistant as `alice` or `bob`:
+
+[source,shell]
+----
+curl -s -u alice:alice -X POST http://localhost:8080/support/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "Please return the two USB-C cables of order 1001, they are too short."}'
+----
+
+[source,json]
+----
+{
+  "reply": "Your return of the two USB-C cables of order 1001 is approved, the refund of 25.00 EUR is on its way."
+}
+----
+
+A 25 EUR return is approved and refunded right away. The customer sees their returns with `GET /support/returns`:
+
+[source,shell]
+----
+curl -s -u alice:alice http://localhost:8080/support/returns
+----
+
+[source,json]
+----
+[ { "returnId": 4, "orderId": 1001, "amount": 25.00, "status": "REFUNDED" } ]
+----
+
+Other orders to ask `alice`'s assistant about:
+
+* 1002, a smart speaker for 129 EUR: its return waits for the approval of the support staff.
+* 1003 is on its way: the assistant tracks it with the carrier.
+* 1004 was delivered 60 days ago: it can no longer be returned.
+* 2001 is `bob`'s order: for `alice`, it does not exist.
+
+Asking for a human opens a ticket, which the stand-in of the ticketing system logs. As `dave`, the assistant can look
+up order 3001, but it cannot return it nor open a ticket: `dave` has not verified their account.
+
+=== Use the support tools from an AI assistant
+
+The support staff connect their AI assistant to the MCP server at `http://localhost:8080/mcp` as `carol`. With
+Claude Code:
+
+[source,shell]
+----
+claude mcp add --transport http support-desk http://localhost:8080/mcp \
+  --header "Authorization: Basic $(printf 'carol:carol' | base64)"
+----
+
+Then ask Claude Code, for example, "Which returns wait for approval? Approve the one for the headphones." It lists
+the pending returns with `list_pending_returns` and approves with `decide_return`, which triggers the refund.
+
+To look at the tools without an AI assistant, use the https://github.com/modelcontextprotocol/inspector[MCP Inspector]:
+
+[source,shell]
+----
+npx @modelcontextprotocol/inspector
+----
+
+Select the `Streamable HTTP` transport type, enter the URL `http://localhost:8080/mcp`, add the header
+`Authorization` with the value `Basic Y2Fyb2w6Y2Fyb2w=` (`carol:carol` encoded in Base64) and connect. Only the
+two support tools are listed, with their hints. Without credentials the MCP server answers with HTTP 401, and
+customers get HTTP 403.
+
+=== Switch a tool off and look at the audit
+
+[source,shell]
+----
+curl -s -u carol:carol -X POST http://localhost:8080/admin/tools/decide_return/disable
+curl -s -u carol:carol -X POST http://localhost:8080/admin/tools/decide_return/enable
+curl -s -u carol:carol http://localhost:8080/admin/audit
+----
+
+[source,json]
+----
+[ { "tool": "decide_return", "caller": "mcp", "outcome": "OK", "calledAt": "..." },
+  { "tool": "request_return", "caller": "alice", "outcome": "OK", "calledAt": "..." } ]
+----
+
+While `decide_return` is disabled, the MCP clients are notified that the tool list changed and no longer see it.
+
+=== Package and run the application
+
+Once you are done with developing you may want to package and run the application.
+
+TIP: Find more details about the JVM mode and Native mode in the Package and run section of
+https://camel.apache.org/camel-quarkus/latest/first-steps.html#_package_and_run_the_application[Camel Quarkus User guide]
+
+Outside of dev mode, there are no Dev Services, no demo users, no demo data and no stand-ins. Before you start the
+packaged application:
+
+* Create the tables in PostgreSQL with `src/main/resources/db/schema.sql`, without the demo data: approving one of its
+  returns would send a real refund. Set the `QUARKUS_DATASOURCE_JDBC_URL`, `QUARKUS_DATASOURCE_USERNAME` and
+  `QUARKUS_DATASOURCE_PASSWORD` environment variables.
+* Set `KAFKA_BOOTSTRAP_SERVERS`.
+* Point `SUPPORT_DESK_CARRIER_URL` and `SUPPORT_DESK_PAYMENT_URL` at the carrier and payment provider APIs.
+* Configure the users with the `quarkus.security.users.embedded.*` properties, see the
+  https://quarkus.io/guides/security-users-properties-file[Quarkus guide], or better use an identity provider such as
+  OpenID Connect. Customers need the `customer` role, and the `verified` role to request returns or open tickets.
+  The support staff need the `support` role.
+
+==== JVM mode
+
+[source,shell]
+----
+mvn clean package -DskipTests
+java -jar target/quarkus-app/quarkus-run.jar
+...
+[io.quarkus] (main) camel-quarkus-examples-ai-tool-support-desk ... started in 1.163s.
+----
+
+==== Native mode
+
+IMPORTANT: Native mode requires having GraalVM and other tools installed. Please check the Prerequisites section
+of https://camel.apache.org/camel-quarkus/latest/first-steps.html#_prerequisites[Camel Quarkus User guide].
+
+To prepare a native executable using GraalVM, run the following command:
+
+[source,shell]
+----
+mvn clean package -DskipTests -Dnative
+./target/*-runner
+...
+[io.quarkus] (main) camel-quarkus-examples-ai-tool-support-desk ... started in 0.013s.
+...
+----
+
+The prompt, the tool schema and the SQL statements are loaded from the classpath, so `application.properties` includes
+them in the native executable with `quarkus.native.resources.includes`.
+
+== Testing
+
+The tests need Docker or Podman, for the PostgreSQL and Kafka started by Dev Services. `SupportDeskChatTest` checks
+what the tool calls of the chat did, in the database and on the external APIs, rather than the wording of the replies.
+`SupportDeskMcpTest` calls the support tools with the MCP client of `quarkus-mcp-server-test`. `SupportDeskTestResource`
+simulates the carrier and the payment provider with http://wiremock.org[WireMock], including outages and a refused
+refund, so that the tests can check, for example, that an approved return is refunded exactly once.
+
+By default, the tests do not call a model: `OllamaTestResource` plays back the stub mappings in
+`src/test/resources/mappings` with WireMock, so the tests run offline. The test mode can be changed:
+
+[source,shell]
+----
+mvn clean test                    # the stub mappings answer instead of the model
+mvn clean test -DtestMode=live    # the model answers, Ollama with granite4.1:3b by default
+mvn clean test -DtestMode=record  # the model answers, and WireMock records stub mappings
+----
+
+The mappings hold one conversation turn each. They were recorded against granite4.1:3b, then their request matchers
+were rewritten by hand: each step matches the last message of the conversation, which is the customer's message or
+the result of the previous tool call, so a tool result that does not match fails the test. The `simulated-*.json`
+mappings were written by hand, for what a recording cannot produce on demand, such as a misbehaving or slow model or a
+failing carrier, so keep them. With `-DtestMode=record`,
+WireMock saves the recordings to `target/wiremock/mappings`: rewrite their matchers in the same way, as they compare
+whole requests, which contain dates that change every day, before they replace the recorded mappings in
+`src/test/resources/mappings`.
+
+Integration tests (`*IT`) run the same tests against the packaged application and are executed by
+`mvn clean verify -Dnative`.
+
+== Not covered yet
+
+* A tool call refused for invalid arguments, for example a missing required one, never reaches the route and Camel
+  publishes no event for it, so the tool audit does not record it.
+* The MCP server does not publish structured tool results with `outputSchema`
+  (https://github.com/apache/camel-quarkus/issues/9299[camel-quarkus#9299]) nor `ai-resource` routes
+  (https://github.com/apache/camel-quarkus/issues/9300[camel-quarkus#9300]) on Quarkus yet, and does not hand the
+  identity of its caller to the routes (https://issues.apache.org/jira/browse/CAMEL-25406[CAMEL-25406]), so the tool
+  audit records the support tools as called by `mcp`.
+
+== Feedback
+
+Please report bugs and propose improvements via https://github.com/apache/camel-quarkus/issues[GitHub issues of Camel Quarkus] project.

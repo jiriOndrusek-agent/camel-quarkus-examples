@@ -1,0 +1,386 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# The AI tools of the support desk. Each route is one tool: the route id is the tool name, the ai-tool endpoint
+# describes the tool to the model and the steps hold the business rules.
+#
+# The tools tagged "customer" are given to the customer chat agent (see support-desk.yaml), the tools tagged "support"
+# are published to the support staff by the MCP server (quarkus.camel.mcp-server.tags in application.properties).
+#
+# The customer tools only ever act on the orders of the logged-in customer: ChatResource puts the authenticated user
+# into the customerId exchange property and the SQL statements filter by it. The model cannot choose the customer.
+# The customer tools that change something are guarded by the verifiedCustomers authorization policy
+# (VerifiedCustomerPolicy): only verified customers may call them.
+
+- route:
+    id: get_order
+    from:
+      uri: ai-tool:get_order
+      parameters:
+        tags: customer
+        description: Get an order of the customer with its status, delivery date and items
+        parameter.orderId: integer
+        parameter.orderId.description: The order number
+        parameter.orderId.required: true
+        readOnlyHint: true
+      steps:
+        - to:
+            uri: sql:classpath:sql/get-order.sql
+            parameters:
+              outputType: SelectOne
+        - choice:
+            when:
+              - expression:
+                  simple:
+                    expression: "${body} == null"
+                steps:
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: "Order ${header.orderId} not found"
+
+- route:
+    id: track_shipment
+    from:
+      uri: ai-tool:track_shipment
+      parameters:
+        tags: customer
+        description: Track the shipment of an order of the customer with the carrier
+        parameter.orderId: integer
+        parameter.orderId.description: The order number
+        parameter.orderId.required: true
+        readOnlyHint: true
+        openWorldHint: true
+      steps:
+        # Only shipments on their way are tracked, get_order tells about the other orders
+        - to:
+            uri: >-
+              sql:SELECT tracking_number FROM orders WHERE id = CAST(:#orderId AS INTEGER)
+              AND customer_id = :#${exchangeProperty.customerId} AND status = 'SHIPPED'
+            parameters:
+              outputType: SelectOne
+        - choice:
+            when:
+              - expression:
+                  simple:
+                    expression: "${body} == null"
+                steps:
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: "Order ${header.orderId} is not on its way, get_order tells its status"
+                  - stop: {}
+        - setProperty:
+            name: trackingNumber
+            expression:
+              simple:
+                expression: "${body}"
+        # Only the tracking number leaves the application, none of the headers of the tool call
+        - removeHeaders:
+            pattern: "*"
+        # A slow or failing carrier API must not break the conversation
+        - circuitBreaker:
+            faultToleranceConfiguration:
+              timeoutEnabled: true
+              timeoutDuration: "5000"
+            steps:
+              - toD:
+                  uri: "{{support-desk.carrier.url}}/shipments/${exchangeProperty.trackingNumber}"
+                  parameters:
+                    httpMethod: GET
+              - convertBodyTo:
+                  type: String
+            onFallback:
+              steps:
+                - setBody:
+                    expression:
+                      constant:
+                        expression: The carrier tracking service is not available right now, try again later
+
+- route:
+    id: request_return
+    from:
+      uri: ai-tool:request_return
+      parameters:
+        tags: customer
+        description: >-
+          Request the return of items of a delivered order of the customer, for a refund. Returns are accepted up to
+          30 days after delivery. Refunds up to 50 EUR are approved right away, larger ones are reviewed by the support
+          staff.
+        argSchema: classpath:schemas/request-return.json
+        authorizationPolicy: "#verifiedCustomers"
+      steps:
+        # The reason must be one of the codes of the returns table. The model learns which ones, rather than that the
+        # tool failed.
+        - choice:
+            when:
+              - expression:
+                  simple:
+                    expression: "${header.reason} !in 'DEFECTIVE,DAMAGED,WRONG_ITEM,NOT_AS_EXPECTED,NO_LONGER_NEEDED'"
+                steps:
+                  - setBody:
+                      expression:
+                        constant:
+                          expression: "The reason must be one of DEFECTIVE, DAMAGED, WRONG_ITEM, NOT_AS_EXPECTED and NO_LONGER_NEEDED"
+                  - stop: {}
+        # PostgreSQL gets the requested items as JSON
+        - setBody:
+            expression:
+              header:
+                expression: items
+        - marshal:
+            json: {}
+        - setProperty:
+            name: items
+            expression:
+              simple:
+                expression: "${bodyAs(String)}"
+        - to:
+            uri: sql:classpath:sql/check-return.sql
+            parameters:
+              outputType: SelectOne
+        # The return rules
+        - choice:
+            when:
+              - expression:
+                  simple:
+                    expression: "${body} == null"
+                steps:
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: "Order ${header.orderId} not found"
+                  - stop: {}
+              - expression:
+                  simple:
+                    expression: "${body[delivered]} != true"
+                steps:
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: "Order ${header.orderId} has not been delivered yet and cannot be returned"
+                  - stop: {}
+              - expression:
+                  simple:
+                    expression: "${body[inReturnWindow]} != true"
+                steps:
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: "Order ${header.orderId} was delivered more than 30 days ago, it can no longer be returned"
+                  - stop: {}
+              - expression:
+                  simple:
+                    expression: "${body[itemsOnOrder]} != true"
+                steps:
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: "The requested items or quantities are not part of order ${header.orderId}"
+                  - stop: {}
+              - expression:
+                  simple:
+                    expression: "${body[autoApprove]} == true"
+                steps:
+                  - setProperty:
+                      name: status
+                      expression:
+                        constant:
+                          expression: APPROVED
+            otherwise:
+              steps:
+                - setProperty:
+                    name: status
+                    expression:
+                      constant:
+                        expression: PENDING_APPROVAL
+        - setProperty:
+            name: amount
+            expression:
+              simple:
+                expression: "${body[amount]}"
+        - setProperty:
+            name: returnItems
+            expression:
+              simple:
+                expression: "${body[items]}"
+        # An approved return is refunded in the background, see the refund-dispatcher and refund routes
+        - to:
+            uri: sql:classpath:sql/insert-return.sql
+            parameters:
+              outputType: SelectOne
+        - choice:
+            when:
+              - expression:
+                  simple:
+                    expression: "${body} == null"
+                steps:
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: "Order ${header.orderId} already has a return"
+              - expression:
+                  simple:
+                    expression: "${exchangeProperty.status} == 'APPROVED'"
+                steps:
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: "Return ${body} approved, the refund of ${exchangeProperty.amount} EUR is on its way"
+            otherwise:
+              steps:
+                - setBody:
+                    expression:
+                      simple:
+                        expression: "Return ${body} of ${exchangeProperty.amount} EUR created, it waits for the approval of the support staff"
+
+- route:
+    id: escalate_to_human
+    from:
+      uri: ai-tool:escalate_to_human
+      parameters:
+        tags: customer
+        description: >-
+          Hand the conversation over to a human support engineer by opening a ticket. Use it when the customer asks for
+          a human or when the other tools cannot solve the problem.
+        parameter.summary: string
+        parameter.summary.description: A short summary of the problem for the support engineer
+        parameter.summary.required: true
+        parameter.priority: string
+        parameter.priority.description: How urgent the problem is
+        parameter.priority.enum: LOW,MEDIUM,HIGH,URGENT
+        parameter.priority.required: true
+        authorizationPolicy: "#verifiedCustomers"
+      steps:
+        # The priority must be one of the priorities of the tickets table. The model learns which ones, rather than that
+        # the tool failed.
+        - choice:
+            when:
+              - expression:
+                  simple:
+                    expression: "${header.priority} !in 'LOW,MEDIUM,HIGH,URGENT'"
+                steps:
+                  - setBody:
+                      expression:
+                        constant:
+                          expression: "The priority must be one of LOW, MEDIUM, HIGH and URGENT"
+                  - stop: {}
+        # The ticket-dispatcher route announces the ticket to the ticketing system of the support team
+        - to:
+            uri: sql:classpath:sql/open-ticket.sql
+            parameters:
+              outputType: SelectOne
+        - setBody:
+            expression:
+              simple:
+                expression: "Ticket ${body} opened, a support engineer will contact the customer by email"
+
+- route:
+    id: list_pending_returns
+    from:
+      uri: ai-tool:list_pending_returns
+      parameters:
+        tags: support
+        description: >-
+          List the returns that need the support staff, with their order, items and customer: those that wait for
+          approval (status PENDING_APPROVAL), and those whose refund the payment provider refused (status REFUND_FAILED)
+        readOnlyHint: true
+        # Published to MCP clients as true when unset, as the MCP specification defines
+        openWorldHint: false
+      steps:
+        - to:
+            uri: sql:classpath:sql/list-pending-returns.sql
+            parameters:
+              outputType: SelectOne
+
+- route:
+    id: decide_return
+    from:
+      uri: ai-tool:decide_return
+      parameters:
+        tags: support
+        description: Approve or reject a return that waits for approval. Approved returns are refunded automatically.
+        parameter.returnId: integer
+        parameter.returnId.description: The id of the return, as listed by list_pending_returns
+        parameter.returnId.required: true
+        parameter.decision: string
+        parameter.decision.enum: approve,reject
+        parameter.decision.required: true
+        parameter.note: string
+        parameter.note.description: Why the return is approved or rejected
+        destructiveHint: true
+        idempotentHint: true
+      steps:
+        - choice:
+            when:
+              - expression:
+                  simple:
+                    expression: "${header.decision} == 'approve'"
+                steps:
+                  - setProperty:
+                      name: status
+                      expression:
+                        constant:
+                          expression: APPROVED
+              - expression:
+                  simple:
+                    expression: "${header.decision} == 'reject'"
+                steps:
+                  - setProperty:
+                      name: status
+                      expression:
+                        constant:
+                          expression: REJECTED
+            otherwise:
+              steps:
+                - setBody:
+                    expression:
+                      constant:
+                        expression: The decision must be approve or reject
+                - stop: {}
+        # Only a pending return changes: deciding again, or deciding an unknown return, changes nothing. The note is cut
+        # to the size of its column. An approved return is refunded in the background, see the refund-dispatcher route.
+        - to:
+            uri: >-
+              sql:UPDATE returns SET status = :#${exchangeProperty.status}, note = LEFT(:#${header.note}, 500)
+              WHERE id = CAST(:#returnId AS INTEGER) AND status = 'PENDING_APPROVAL' RETURNING id
+            parameters:
+              outputType: SelectOne
+        - choice:
+            when:
+              - expression:
+                  simple:
+                    expression: "${body} == null"
+                steps:
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: "Return ${header.returnId} does not wait for approval, nothing changed"
+              - expression:
+                  simple:
+                    expression: "${exchangeProperty.status} == 'APPROVED'"
+                steps:
+                  - setBody:
+                      expression:
+                        simple:
+                          expression: "Return ${body} approved, the customer will be refunded"
+            otherwise:
+              steps:
+                - setBody:
+                    expression:
+                      simple:
+                        expression: "Return ${body} rejected"
