@@ -56,3 +56,6 @@ updates:
       - dependency-name: "org.apache.camel:*"
       - dependency-name: "org.apache.camel.maven:*"
       - dependency-name: "org.apache.camel.quarkus:*"
+      # The Quarkus MCP server is upgraded manually, to the release Camel Quarkus is built against: camel-quarkus-bom
+      # manages only some of its artifacts
+      - dependency-name: "io.quarkiverse.mcp:*"
