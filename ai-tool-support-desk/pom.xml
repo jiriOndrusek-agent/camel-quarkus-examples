@@ -30,6 +30,9 @@
     <properties>
         <quarkus.platform.version>4.0.0.Beta1</quarkus.platform.version>
         <camel-quarkus.platform.version>4.0.0-SNAPSHOT</camel-quarkus.platform.version>
+        <!-- TODO: Re-enable when quarkus-mcp-server is compatible with Quarkus 4 - https://github.com/apache/camel-quarkus/issues/9362 -->
+        <skipTests>true</skipTests>
+        <quarkus.build.skip>true</quarkus.build.skip>
 
         <quarkus.platform.group-id>io.quarkus</quarkus.platform.group-id>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
