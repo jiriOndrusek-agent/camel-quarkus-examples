@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="836" viewBox="0 0 900 836" role="img" aria-labelledby="title desc">
+  <title id="title">Secure Partner Gateway: request path, security checks and audit points</title>
+  <desc id="desc">A request passes eleven numbered steps: HTTP request, token check, role check, REST contract check, tenant check, input rules, idempotency check, business routes with owner check, audit append, audit store with anchors, and the response. Steps marked with a green dot can write an audit record.</desc>
+
+  <defs>
+    <marker id="arrow-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#57606a"/></marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1a7f37"/></marker>
+  </defs>
+
+  <style>
+    text { font-family: Arial, Helvetica, "Liberation Sans", sans-serif; font-size: 13px; fill: #3d444d; }
+    .h { font-size: 19px; font-weight: 700; fill: #1f2328; }
+    .t { font-size: 14.5px; font-weight: 700; fill: #1f2328; }
+    .f { font-size: 12.5px; font-weight: 700; fill: #a40e26; text-anchor: end; }
+    .fs { font-size: 12.5px; font-weight: 700; fill: #a40e26; }
+    .a { font-size: 12.5px; font-weight: 700; fill: #116329; }
+    .u { font-size: 12.5px; font-style: italic; fill: #57606a; }
+    .m { font-size: 12.5px; font-weight: 700; fill: #1f2328; }
+    .n { font-size: 12.5px; font-weight: 700; fill: #ffffff; text-anchor: middle; }
+    .bg { fill: #ffffff; stroke: #d0d7de; stroke-width: 1; }
+    .sec { fill: #ddf4ff; stroke: #0969da; stroke-width: 1.5; }
+    .pro { fill: #f6f8fa; stroke: #8c959f; stroke-width: 1.5; }
+    .aud { fill: #dafbe1; stroke: #1a7f37; stroke-width: 1.5; }
+    .ext { fill: #ffffff; stroke: #6e7781; stroke-width: 1.5; stroke-dasharray: 6 4; }
+    .in { fill: #ffffff; stroke: #1a7f37; stroke-width: 1; }
+    .dot { fill: none; stroke-width: 24; stroke-linecap: round; }
+    .grey { stroke: #57606a; }
+    .blue { stroke: #0969da; }
+    .green { stroke: #1a7f37; }
+    .ln { fill: none; stroke: #57606a; stroke-width: 1.6; }
+    .au { fill: none; stroke: #1a7f37; stroke-width: 1.6; stroke-dasharray: 5 4; }
+  </style>
+
+  <rect class="bg" x="0.5" y="0.5" width="899" height="835" rx="10"/>
+  <text class="h" x="40" y="34">Secure Partner Gateway: request path, security checks and audit points</text>
+  <text x="40" y="54">Example: POST /api/orders. The numbers are the step numbers in architecture.adoc.</text>
+
+  <!-- Client -->
+  <rect class="pro" x="40" y="66" width="470" height="46" rx="8"/>
+  <text class="t" x="56" y="86">Client</text>
+  <text x="56" y="103">partner or auditor, with a bearer token from Keycloak</text>
+
+  <!-- Arrows down the left column -->
+  <path fill="#57606a" d="M61.2,112 h1.6 v16 h-1.6 z M57,128 h10 l-5,8 z M57,204 h10 l-5,8 z M57,280 h10 l-5,8 z M57,356 h10 l-5,8 z M57,432 h10 l-5,8 z M57,508 h10 l-5,8 z M57,584 h10 l-5,8 z M57,660 h10 l-5,8 z M57,736 h10 l-5,8 z"/>
+
+  <!-- Step boxes -->
+  <rect class="pro" x="40" y="136" width="470" height="64" rx="8"/>
+  <rect class="sec" x="40" y="212" width="470" height="64" rx="8"/>
+  <rect class="sec" x="40" y="288" width="470" height="64" rx="8"/>
+  <rect class="pro" x="40" y="364" width="470" height="64" rx="8"/>
+  <rect class="sec" x="40" y="440" width="470" height="64" rx="8"/>
+  <rect class="sec" x="40" y="516" width="470" height="64" rx="8"/>
+  <rect class="pro" x="40" y="592" width="470" height="64" rx="8"/>
+  <rect class="sec" x="40" y="668" width="470" height="64" rx="8"/>
+  <rect class="pro" x="40" y="744" width="470" height="64" rx="8"/>
+
+  <!-- Number badges: grey = other step, blue = security check -->
+  <path class="dot grey" d="M62,159 h0.01 M62,387 h0.01 M62,615 h0.01 M62,767 h0.01"/>
+  <path class="dot blue" d="M62,235 h0.01 M62,311 h0.01 M62,463 h0.01 M62,539 h0.01 M62,691 h0.01"/>
+  <text class="n" x="62" y="163.5">1</text>
+  <text class="n" x="62" y="239.5">2</text>
+  <text class="n" x="62" y="315.5">3</text>
+  <text class="n" x="62" y="391.5">4</text>
+  <text class="n" x="62" y="467.5">5</text>
+  <text class="n" x="62" y="543.5">6</text>
+  <text class="n" x="62" y="619.5">7</text>
+  <text class="n" x="62" y="695.5">8</text>
+  <text class="n" x="62" y="771.5">11</text>
+
+  <!-- 1 HTTP request -->
+  <text class="t" x="84" y="160">HTTP request</text>
+  <text class="f" x="494" y="160">fails: 413</text>
+  <text x="84" y="178">Quarkus HTTP server, port 8080, body limit 64 KB</text>
+  <text class="u" x="84" y="194">not audited</text>
+  <!-- 2 Token check (OIDC) -->
+  <text class="t" x="84" y="236">Token check (OIDC)</text>
+  <text class="f" x="494" y="236">fails: 401</text>
+  <text x="84" y="254">signature, issuer, audience gateway-api, expiry</text>
+  <text class="a" x="84" y="270">audit: AUTHN_FAILED</text>
+  <!-- 3 Role check -->
+  <text class="t" x="84" y="312">Role check</text>
+  <text class="f" x="494" y="312">fails: 401 or 403</text>
+  <text x="84" y="330">deny all, then one role per path and method</text>
+  <text class="a" x="84" y="346">audit: AUTHZ_DENIED</text>
+  <!-- 4 REST contract check -->
+  <text class="t" x="84" y="388">REST contract check</text>
+  <text class="f" x="494" y="388">fails: 415, 406, 400</text>
+  <text x="84" y="406">Content-Type, Accept, JSON syntax (REST DSL)</text>
+  <text class="u" x="84" y="422">not audited</text>
+  <!-- 5 Tenant check -->
+  <text class="t" x="84" y="464">Tenant check</text>
+  <text class="f" x="494" y="464">fails: 403</text>
+  <text x="84" y="482">CallerIdentity: partner_id from the verified token</text>
+  <text class="a" x="84" y="498">audit: AUTHZ_DENIED</text>
+  <!-- 6 Input rules -->
+  <text class="t" x="84" y="540">Input rules</text>
+  <text class="f" x="494" y="540">fails: 429 or 400</text>
+  <text x="84" y="558">header allow-list, rate limit, key and schema checks</text>
+  <text class="a" x="84" y="574">audit: REQUEST_REJECTED</text>
+  <!-- 7 Idempotency check -->
+  <text class="t" x="84" y="616">Idempotency check</text>
+  <text class="f" x="494" y="616">retry: 200 or 409</text>
+  <text x="84" y="634">one key per partner: partnerId:Idempotency-Key</text>
+  <text class="a" x="84" y="650">audit: ORDER_REPLAYED, REQUEST_REJECTED</text>
+  <!-- 8 Business routes -->
+  <text class="t" x="84" y="692">Business routes</text>
+  <text class="f" x="494" y="692">other partner: 404</text>
+  <text x="84" y="710">OrderService accept, replay, read (owner check)</text>
+  <text class="a" x="84" y="726">audit: ORDER_* and AUDIT_* records</text>
+  <!-- 11 Response -->
+  <text class="t" x="84" y="768">Response</text>
+  <text class="f" x="494" y="768">unexpected error: 500</text>
+  <text x="84" y="786">JSON body, errors as application/problem+json</text>
+  <text class="a" x="84" y="802">audit: REQUEST_FAILED</text>
+
+  <!-- Audit points: green dots on the box edge, dashed line to the audit append -->
+  <path class="au" marker-end="url(#arrow-green)" d="M519,244 H530 V776 M519,320 H530 M519,472 H530 M519,548 H530 M519,624 H530 M519,700 H530 M519,776 H530 M530,425 H556"/>
+  <path class="dot green" style="stroke-width:18" d="M510,244 h0.01 M510,320 h0.01 M510,472 h0.01 M510,548 h0.01 M510,624 h0.01 M510,700 h0.01 M510,776 h0.01"/>
+
+  <!-- Legend -->
+  <rect class="bg" x="560" y="136" width="320" height="109" rx="8"/>
+  <text class="m" x="576" y="157">Legend</text>
+  <rect class="sec" x="576" y="169" width="24" height="12" rx="3"/>
+  <text x="610" y="180">security check</text>
+  <rect class="aud" x="576" y="188" width="24" height="12" rx="3"/>
+  <text x="610" y="199">audit</text>
+  <path class="dot green" style="stroke-width:14" d="M588,213 h0.01"/>
+  <text x="610" y="218">can write an audit record (step 9)</text>
+  <text class="fs" x="576" y="237">fails: 401</text>
+  <text x="652" y="237">status to the caller</text>
+
+  <!-- Start-up events -->
+  <rect class="aud" x="560" y="269" width="320" height="76" rx="8"/>
+  <text class="t" x="576" y="291">Start-up and route events</text>
+  <text x="576" y="309">CamelLifecycleAuditor writes:</text>
+  <text class="a" x="576" y="324">CONTEXT_STARTED, ROUTE_STARTED,</text>
+  <text class="a" x="576" y="338">ROUTE_STOPPED, ROUTE_RELOADED</text>
+  <path class="au" marker-end="url(#arrow-green)" d="M720,345 V369"/>
+
+  <!-- 9 Audit append -->
+  <rect class="aud" x="560" y="371" width="320" height="108" rx="8"/>
+  <path class="dot green" d="M582,394 h0.01"/>
+  <text class="n" x="582" y="398.5">9</text>
+  <text class="t" x="604" y="399">Audit append</text>
+  <text x="576" y="420">AuditLog.append(): the only writer</text>
+  <text x="576" y="439">1. lock the chain head row</text>
+  <text x="576" y="456">2. HMAC of record + previous hash</text>
+  <text x="576" y="473">3. insert record, move the head</text>
+  <path class="ln" marker-end="url(#arrow-grey)" d="M720,479 V503"/>
+
+  <!-- 10 Audit store -->
+  <rect class="aud" x="560" y="505" width="320" height="136" rx="8"/>
+  <path class="dot green" d="M582,528 h0.01"/>
+  <text class="n" x="582" y="532.5">10</text>
+  <text class="t" x="604" y="533">Audit store (PostgreSQL)</text>
+  <rect class="in" x="576" y="545" width="288" height="34" rx="5"/>
+  <text class="m" x="586" y="560">audit_event</text>
+  <text x="586" y="574">append-only (database trigger)</text>
+  <rect class="in" x="576" y="585" width="288" height="34" rx="5"/>
+  <text class="m" x="586" y="600">audit_chain_head</text>
+  <text x="586" y="614">one row: last seq and hash</text>
+  <text class="u" x="576" y="633">read by audit-query and audit-verify (step 8)</text>
+  <path class="ln" marker-end="url(#arrow-grey)" d="M720,641 V661"/>
+
+  <!-- Anchor -->
+  <rect class="aud" x="560" y="663" width="320" height="62" rx="8"/>
+  <text class="t" x="576" y="684">Anchor: route audit-anchor</text>
+  <text x="576" y="702">logs seq and hash every 5 minutes</text>
+  <text class="u" x="576" y="717">a log line, the example does not check it</text>
+  <path class="ln" stroke-dasharray="5 4" marker-end="url(#arrow-grey)" d="M720,725 V745"/>
+
+  <!-- Outside the database -->
+  <rect class="ext" x="560" y="747" width="320" height="52" rx="8"/>
+  <text class="t" x="576" y="768">Outside the database (your setup)</text>
+  <text x="576" y="786">ship the logs to a SIEM or WORM storage</text>
+</svg>

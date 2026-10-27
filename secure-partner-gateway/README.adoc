@@ -14,6 +14,9 @@ Partner systems submit orders to the gateway. The gateway authenticates and auth
 apart, validates, deduplicates and rate-limits the orders, stores them and writes a tamper-evident audit trail.
 Auditors query and verify that trail.
 
+*Architecture guide:* link:docs/architecture.adoc[docs/architecture.adoc] +
+The request path, the security checks, the audit chain and the order workflow, with a diagram.
+
 [cols="2,1,5"]
 |===
 |Endpoint |Role |Behavior
