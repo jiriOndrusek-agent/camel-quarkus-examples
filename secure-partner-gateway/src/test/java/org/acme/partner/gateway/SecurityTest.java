@@ -21,6 +21,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.Map;
 import java.util.UUID;
 
 import io.quarkus.test.common.http.TestHTTPResource;
@@ -190,11 +191,71 @@ class SecurityTest extends AbstractGatewayTest {
                     .header("X-Probe", nullValue())
                     .header("Authorization", nullValue())
                     .header("Cookie", nullValue())
+                    .header(IDEMPOTENCY_KEY, nullValue())
                     .header("X-Content-Type-Options", "nosniff")
                     .body(not(containsString(token)));
         }
         accepted.then().statusCode(202);
         rejected.then().statusCode(400);
         read.then().statusCode(200);
+    }
+
+    @Test
+    void injectedHeadersAreNotEchoed() {
+        // Behind nginx, an echoed X-Accel-Redirect would make nginx answer with that internal path
+        Map<String, String> injected = Map.of(
+                "X-Accel-Redirect", "/internal/secret",
+                "Set-Cookie", "injected=1",
+                "Location", "https://evil.example",
+                "Retry-After", "999");
+        String withoutTenant = keycloak.getClientAccessToken("partner-without-tenant", "without-tenant-test-secret");
+
+        // answered before the removeHeaders of the route
+        Response noTenant = given().auth().oauth2(withoutTenant).headers(injected)
+                .header(IDEMPOTENCY_KEY, newKey())
+                .contentType("application/json")
+                .body(ORDER)
+                .post("/api/orders");
+        Response malformed = given().auth().oauth2(acmeToken()).headers(injected)
+                .header(IDEMPOTENCY_KEY, newKey())
+                .contentType("application/json; injected=1")
+                .body("{\"sku\":")
+                .post("/api/orders");
+        // inputs of the route, one with a line break that no response header can hold
+        Response audit = given().auth().oauth2(auditorToken()).headers(injected)
+                .queryParam("actor", "x\r\nSet-Cookie: injected=1")
+                .queryParam("action", "Set-Cookie")
+                .queryParam("limit", "5")
+                .get("/api/audit");
+
+        noTenant.then().statusCode(403).contentType("application/problem+json");
+        malformed.then().statusCode(400).contentType("application/problem+json");
+        audit.then().statusCode(200).contentType("application/json");
+        for (Response response : new Response[] { noTenant, malformed, audit }) {
+            for (String header : new String[] { "X-Accel-Redirect", "Set-Cookie", "Location", "Retry-After",
+                    IDEMPOTENCY_KEY, "actor", "action", "limit" }) {
+                response.then().header(header, nullValue());
+            }
+            response.then().header("Content-Type", not(containsString("injected")));
+        }
+    }
+
+    @Test
+    void metricsDoNotTagOrderIdsOrRandomPaths() throws Exception {
+        String orderId = createOrder(acmeToken());
+        given().auth().oauth2(acmeToken()).get("/api/orders/" + orderId).then().statusCode(200);
+        given().get("/api/orders/" + orderId).then().statusCode(401);
+        String randomPath = "/api/" + UUID.randomUUID();
+        given().get(randomPath).then().statusCode(401);
+        given().auth().oauth2(acmeToken()).get(randomPath).then().statusCode(403);
+
+        // the uri tag is the path template, or UNKNOWN for a 4xx on another path
+        URI metrics = management.toURI().resolve("/observe/metrics");
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> given().get(metrics)
+                .then().statusCode(200)
+                .body(containsString("status=\"401\",uri=\"/api/orders/{id}\""))
+                .body(containsString("status=\"403\",uri=\"UNKNOWN\""))
+                .body(not(containsString(orderId)))
+                .body(not(containsString(randomPath))));
     }
 }

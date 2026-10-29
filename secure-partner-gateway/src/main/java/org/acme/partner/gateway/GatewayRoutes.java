@@ -67,9 +67,8 @@ public class GatewayRoutes extends RouteBuilder {
     public void configure() {
         JacksonDataFormat json = new JacksonDataFormat(mapper, Object.class);
 
-        // 415 for a wrong Content-Type, 406 for an unacceptable Accept header
-        restConfiguration().clientRequestValidation(true);
-
+        // platform-http answers 415 for a wrong Content-Type and 406 for an unacceptable Accept header. Malformed JSON
+        // is left to the schema validation of the route, behind the trust boundary.
         rest("/api")
                 .post("/orders").consumes("application/json").produces("application/json").to("direct:order-create")
                 .get("/orders/{id}").produces("application/json").to("direct:order-read")

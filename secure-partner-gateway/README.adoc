@@ -165,8 +165,8 @@ mvn clean test               # JVM mode
 mvn clean verify -Dnative    # the native application
 ----
 
-* The tests need Docker or Podman. `-Dskip-testcontainers-tests` skips them in JVM and native mode, the plain unit test
-`AuditChainTest` still runs.
+* The tests need Docker or Podman. `-Dskip-testcontainers-tests` skips them in JVM and native mode, the plain unit tests
+`AuditChainTest` and `AuditLogTest` still run.
 * The tests of the packaged application run with the `test` profile (`quarkus.test.integration-test-profile=test`),
 which has the test HMAC key and a long throttle period. With the default `prod` profile, the application would refuse
 to start without `AUDIT_HMAC_KEY`.
@@ -181,19 +181,23 @@ The most specific path wins, and a method that is not listed on that path is den
 * Proactive authentication, 64 KB body limit, `X-Content-Type-Options: nosniff`.
 * In `prod`, the token verification warnings of Quarkus OIDC are not logged, as some contain the rejected token.
 The audit trail records these failures.
+* The `uri` tag of the HTTP metrics is the path template (`/api/orders/{id}`), or `UNKNOWN` (`NOT_FOUND` for a `404`)
+for a `4xx` on another path: no order ids in the metrics, and clients cannot add tag values.
 
 Camel:
 
-* The REST DSL client request validation answers `415`, `406` and `400` for malformed JSON.
+* `platform-http` answers `415` and `406` for media types that the REST DSL does not declare.
 * `CallerIdentity` reads the `SecurityIdentity` that Quarkus verified (header `CamelVertxPlatformHttpAuthenticatedUser`)
 into exchange properties. The tenant is the signed `partner_id` claim, never a header or a body field. A partner token
 without that claim gets `403`.
 * Trust boundary: right after that, `removeHeaders("*", <inputs of the route>)` drops `Authorization`, `Cookie`,
 `Camel*` and spoofed ids. Caller tokens are never forwarded.
+* `ResponseHeaderFilter`, the header filter of `platform-http`, lets only `Retry-After` into responses. Request headers
+are never echoed, also not by answers before `removeHeaders`, like the `403` above.
 * `OrderService` enforces tenant ownership.
 * Per partner rate limit (Throttle EIP, `429` with `Retry-After`), JSON schema `schema/order.json` (no additional
-fields), idempotency per `partnerId:Idempotency-Key` with the `JpaMessageIdRepository`. `IdempotencyKeyRepository`
-makes it also see a concurrent insert of the same key on PostgreSQL as a duplicate.
+fields, also rejects malformed JSON), idempotency per `partnerId:Idempotency-Key` with the `JpaMessageIdRepository`.
+`IdempotencyKeyRepository` makes it also see a concurrent insert of the same key on PostgreSQL as a duplicate.
 * One `routeConfiguration()` maps errors to RFC 9457 `application/problem+json`, without exception details.
 
 == Audit design
@@ -233,8 +237,8 @@ consistently. Only anchors kept outside of the database reveal that.
 * Appends are serialized. A verification loads the whole chain into memory and blocks appends meanwhile.
 * Rotating the HMAC key needs a key id in each record, which is not implemented.
 * Real compliance needs external anchoring, for example a SIEM, WORM storage or a timestamping service.
-* The `413` of the HTTP layer and the `415`, `406` and malformed JSON `400` of the REST DSL validation happen before
-the route: they are plain answers, not `application/problem+json`, and they are not audited.
+* The `413` of the HTTP layer and the `415` and `406` of `platform-http` happen before the route: they are plain
+answers, not `application/problem+json`, and they are not audited.
 * The `Idempotency-Key` is committed in its own transaction just before the order. If the gateway stops in between, the
 key stays without order and its retries get `409` until the key is deleted from `camel_messageprocessed`.
 * Idempotency keys are never deleted, `camel_messageprocessed` grows without limit.
@@ -242,8 +246,9 @@ key stays without order and its retries get `409` until the key is deleted from 
 == Production checklist
 
 * Run with the `prod` profile: `camel.main.profile=prod` makes Camel refuse insecure Camel settings.
-* Set `QUARKUS_OIDC_AUTH_SERVER_URL`, `QUARKUS_DATASOURCE_*` and `AUDIT_HMAC_KEY` (32 characters at least) from a
-secret store.
+* Set `QUARKUS_OIDC_AUTH_SERVER_URL`, `QUARKUS_DATASOURCE_*` and `AUDIT_HMAC_KEY` from a secret store. The key must be
+random (`openssl rand -base64 32`): the gateway does not start with fewer than 32 characters, or fewer than 8 different
+ones.
 * Serve HTTPS only, for example by terminating TLS in front of the gateway.
 * Do not expose the management port `9876`.
 * Rate limit unauthenticated traffic in front of the gateway: every `401`, `403` and `429` is an audit append, and

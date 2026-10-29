@@ -63,7 +63,7 @@ class OrderApiTest extends AbstractGatewayTest {
 
     @Test
     void requestsBreakingTheRestContractAreRejected() {
-        // checked by the REST DSL client request validation, before the route runs
+        // checked by platform-http, before the route runs
         String token = acmeToken();
         given().auth().oauth2(token).header(IDEMPOTENCY_KEY, newKey())
                 .contentType("text/plain").body("WIDGET-1 x 2")
@@ -73,15 +73,14 @@ class OrderApiTest extends AbstractGatewayTest {
                 .contentType("application/json").accept("application/xml").body(ORDER)
                 .post("/api/orders")
                 .then().statusCode(406);
-        postOrder(token, newKey(), "{\"sku\":")
-                .then().statusCode(400)
-                .body(not(containsString("Exception")));
     }
 
     @Test
     void invalidOrdersAreRejectedWithoutInternals() {
         String token = acmeToken();
         String[] invalidOrders = {
+                // malformed JSON
+                "{\"sku\":",
                 "{\"sku\":\"WIDGET-1\",\"quantity\":0}",
                 // the tenant cannot be smuggled in through the body
                 "{\"sku\":\"WIDGET-1\",\"quantity\":1,\"partnerId\":\"globex\"}",

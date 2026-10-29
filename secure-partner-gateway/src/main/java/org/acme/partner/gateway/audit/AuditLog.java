@@ -43,6 +43,8 @@ public class AuditLog {
 
     private static final Logger LOG = Logger.getLogger(AuditLog.class);
     private static final int MIN_KEY_LENGTH = 32;
+    // Random keys have far more, placeholders such as 32 times "a" or "changeme" repeated have fewer
+    private static final int MIN_KEY_DISTINCT_CHARACTERS = 8;
     private static final int DEFAULT_LIMIT = 50;
     private static final int MAX_LIMIT = 500;
 
@@ -60,8 +62,9 @@ public class AuditLog {
 
     @PostConstruct
     void init() {
-        if (hmacKey.length() < MIN_KEY_LENGTH) {
-            throw new IllegalStateException("audit.hmac-key must have at least " + MIN_KEY_LENGTH + " characters");
+        if (hmacKey.length() < MIN_KEY_LENGTH || hmacKey.chars().distinct().count() < MIN_KEY_DISTINCT_CHARACTERS) {
+            throw new IllegalStateException("audit.hmac-key must be a random key of at least " + MIN_KEY_LENGTH
+                    + " characters, for example from openssl rand -base64 32");
         }
         chain = new AuditChain(hmacKey);
     }
