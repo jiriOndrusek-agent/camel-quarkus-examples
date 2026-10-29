@@ -42,7 +42,8 @@ import org.jboss.logging.Logger;
  */
 @ApplicationScoped
 @RegisterForReflection(targets = { ValidationException.class, ThrottlerRejectedExecutionException.class,
-        MissingTenantException.class, OrderNotOwnedException.class, OrderInProgressException.class })
+        MissingTenantException.class, OrderNotOwnedException.class, OrderInProgressException.class,
+        UnsupportedMediaTypeException.class })
 public class ErrorHandling extends RouteConfigurationBuilder {
 
     private static final Logger LOG = Logger.getLogger(ErrorHandling.class);
@@ -63,6 +64,10 @@ public class ErrorHandling extends RouteConfigurationBuilder {
         // schema violations, missing or invalid Idempotency-Key, invalid query parameters
         errors.onException(ValidationException.class).handled(true)
                 .process(e -> problem(e, 400, "Bad Request", "The request does not match the API contract",
+                        "REQUEST_REJECTED", Outcome.REJECTED));
+
+        errors.onException(UnsupportedMediaTypeException.class).handled(true)
+                .process(e -> problem(e, 415, "Unsupported Media Type", "The order must be application/json",
                         "REQUEST_REJECTED", Outcome.REJECTED));
 
         errors.onException(ThrottlerRejectedExecutionException.class).handled(true)

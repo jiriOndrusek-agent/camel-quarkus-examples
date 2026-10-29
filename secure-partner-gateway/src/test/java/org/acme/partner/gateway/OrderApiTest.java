@@ -16,6 +16,7 @@
  */
 package org.acme.partner.gateway;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 
@@ -73,6 +74,12 @@ class OrderApiTest extends AbstractGatewayTest {
                 .contentType("application/json").accept("application/xml").body(ORDER)
                 .post("/api/orders")
                 .then().statusCode(406);
+        // platform-http lets a wildcard through, the route rejects it. Bytes, as REST Assured cannot encode a wildcard.
+        given().auth().oauth2(token).header(IDEMPOTENCY_KEY, newKey())
+                .contentType("application/*").body(ORDER.getBytes(StandardCharsets.UTF_8))
+                .post("/api/orders")
+                .then().statusCode(415)
+                .contentType("application/problem+json");
     }
 
     @Test
@@ -84,6 +91,9 @@ class OrderApiTest extends AbstractGatewayTest {
                 "{\"sku\":\"WIDGET-1\",\"quantity\":0}",
                 // the tenant cannot be smuggled in through the body
                 "{\"sku\":\"WIDGET-1\",\"quantity\":1,\"partnerId\":\"globex\"}",
+                // text or a second JSON value after the order
+                ORDER + " xyz",
+                ORDER + "{\"partnerId\":\"globex\"}",
         };
         for (String order : invalidOrders) {
             postOrder(token, newKey(), order)

@@ -40,7 +40,7 @@ above the rate limit.
 |===
 
 Every endpoint answers `401` without a valid token, and `403` for the wrong role, a path or method that is not listed,
-or a partner token without the `partner_id` claim.
+or a partner token without the `partner_id` claim or with a blank one.
 Health and metrics are only on the management port `9876`: `/observe/health` and `/observe/metrics`.
 
 == Prerequisites
@@ -67,6 +67,9 @@ never packaged. Its secrets are for development and tests only:
 
 |`partner-without-tenant`
 |Client credentials grant, secret `without-tenant-test-secret`, role `partner`, but no `partner_id` claim
+
+|`partner-blank-tenant`
+|Like `partner-without-tenant`, with secret `blank-tenant-test-secret` and a blank `partner_id` claim
 
 |`aaron`
 |User with role `auditor` and password `aaron-test-password`, password grant through the public client `audit-console`
@@ -186,18 +189,20 @@ for a `4xx` on another path: no order ids in the metrics, and clients cannot add
 
 Camel:
 
-* `platform-http` answers `415` and `406` for media types that the REST DSL does not declare.
+* `platform-http` answers `415` and `406` for media types that the REST DSL does not declare. It lets a wildcard
+`Content-Type` such as `application/*` through, the order route answers `415` for it.
 * `CallerIdentity` reads the `SecurityIdentity` that Quarkus verified (header `CamelVertxPlatformHttpAuthenticatedUser`)
 into exchange properties. The tenant is the signed `partner_id` claim, never a header or a body field. A partner token
-without that claim gets `403`.
+without that claim, or with a blank one, gets `403`.
 * Trust boundary: right after that, `removeHeaders("*", <inputs of the route>)` drops `Authorization`, `Cookie`,
 `Camel*` and spoofed ids. Caller tokens are never forwarded.
 * `ResponseHeaderFilter`, the header filter of `platform-http`, lets only `Retry-After` into responses. Request headers
 are never echoed, also not by answers before `removeHeaders`, like the `403` above.
 * `OrderService` enforces tenant ownership.
 * Per partner rate limit (Throttle EIP, `429` with `Retry-After`), JSON schema `schema/order.json` (no additional
-fields, also rejects malformed JSON), idempotency per `partnerId:Idempotency-Key` with the `JpaMessageIdRepository`.
-`IdempotencyKeyRepository` makes it also see a concurrent insert of the same key on PostgreSQL as a duplicate.
+fields, also rejects malformed JSON and text after the order), idempotency per `partnerId:Idempotency-Key` with the
+`JpaMessageIdRepository`. `IdempotencyKeyRepository` makes it also see a concurrent insert of the same key on
+PostgreSQL as a duplicate.
 * One `routeConfiguration()` maps errors to RFC 9457 `application/problem+json`, without exception details.
 
 == Audit design

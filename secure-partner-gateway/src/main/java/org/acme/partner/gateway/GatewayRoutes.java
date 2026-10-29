@@ -79,11 +79,13 @@ public class GatewayRoutes extends RouteBuilder {
         // headers are dropped except the inputs the route declares (Authorization, Cookie, Camel*, spoofed ids, ...)
         from("direct:order-create").routeId("order-create")
                 .process(callerIdentity)
+                .process(GatewayRoutes::requireJson)
                 .removeHeaders("*", IDEMPOTENCY_KEY)
                 .throttle(throttleMaxRequests).totalRequestsMode().timePeriodMillis(throttlePeriod.toMillis())
                 .correlationExpression(exchangeProperty(CallerIdentity.PARTNER_ID)).rejectExecution(true)
                 .validate(header(IDEMPOTENCY_KEY).regex("[A-Za-z0-9_-]{8,64}"))
-                .to("json-validator:schema/order.json")
+                // the order must be the whole body, by default text after the first JSON value is ignored
+                .to("json-validator:schema/order.json?enabledDeserializationFeatures=FAIL_ON_TRAILING_TOKENS")
                 .unmarshal(new JacksonDataFormat(mapper, OrderRequest.class))
                 // keys are scoped to the partner, so partners cannot collide with or probe each other's keys
                 .idempotentConsumer(simple("${exchangeProperty.partnerId}:${header.Idempotency-Key}"),
@@ -129,5 +131,13 @@ public class GatewayRoutes extends RouteBuilder {
         from("timer:audit-anchor?period=" + anchorPeriod.toMillis()).routeId("audit-anchor")
                 .bean(auditLog, "head")
                 .log("Audit chain head: ${body}");
+    }
+
+    // platform-http answers 415 for other media types, but lets wildcards such as application/* through
+    private static void requireJson(Exchange exchange) {
+        String contentType = exchange.getMessage().getHeader(Exchange.CONTENT_TYPE, "", String.class);
+        if (!"application/json".equalsIgnoreCase(contentType.split(";", 2)[0].trim())) {
+            throw new UnsupportedMediaTypeException();
+        }
     }
 }

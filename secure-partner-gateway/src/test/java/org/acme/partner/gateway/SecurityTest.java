@@ -127,13 +127,18 @@ class SecurityTest extends AbstractGatewayTest {
 
     @Test
     void partnerTokenWithoutTenantIsForbidden() {
-        String token = keycloak.getClientAccessToken("partner-without-tenant", "without-tenant-test-secret");
-        postOrder(token, newKey(), ORDER).then().statusCode(403).contentType("application/problem+json");
-        given().auth().oauth2(token).get("/api/orders/" + UUID.randomUUID()).then().statusCode(403);
+        // no partner_id claim, or a blank one that all such clients would share as their tenant
+        String[][] clients = { { "partner-without-tenant", "without-tenant-test-secret" },
+                { "partner-blank-tenant", "blank-tenant-test-secret" } };
+        for (String[] client : clients) {
+            String token = keycloak.getClientAccessToken(client[0], client[1]);
+            postOrder(token, newKey(), ORDER).then().statusCode(403).contentType("application/problem+json");
+            given().auth().oauth2(token).get("/api/orders/" + UUID.randomUUID()).then().statusCode(403);
 
-        assertTrue(audit("?action=AUTHZ_DENIED&limit=500").stream()
-                .anyMatch(event -> "service-account-partner-without-tenant".equals(event.get("actor"))
-                        && "partner token without partner_id claim".equals(event.get("reason"))));
+            assertTrue(audit("?action=AUTHZ_DENIED&limit=500").stream()
+                    .anyMatch(event -> ("service-account-" + client[0]).equals(event.get("actor"))
+                            && "partner token without partner_id claim".equals(event.get("reason"))));
+        }
     }
 
     @Test

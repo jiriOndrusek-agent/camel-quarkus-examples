@@ -34,8 +34,9 @@ public record Caller(String name, ActorType type, String partnerId, String remot
         if (identity == null || identity.isAnonymous()) {
             return new Caller("anonymous", ActorType.ANONYMOUS, null, remoteAddr, exchangeId);
         }
+        // a blank claim counts as none: all clients with a blank claim would share one tenant
         String partnerId = identity.getPrincipal() instanceof JsonWebToken jwt
-                && jwt.getClaim(PARTNER_ID_CLAIM) instanceof String claim ? claim : null;
+                && jwt.getClaim(PARTNER_ID_CLAIM) instanceof String claim && !claim.isBlank() ? claim : null;
         ActorType type = partnerId != null ? ActorType.CLIENT : ActorType.USER;
         return new Caller(identity.getPrincipal().getName(), type, partnerId, remoteAddr, exchangeId);
     }

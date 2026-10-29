@@ -146,6 +146,42 @@
       ]
     },
     {
+      "clientId": "partner-blank-tenant",
+      "description": "Misconfigured partner: role partner but a blank partner_id claim. Test-only secret.",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "blank-tenant-test-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "gateway-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "gateway-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "partner-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": {
+            "claim.name": "partner_id",
+            "claim.value": " ",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
       "clientId": "audit-console",
       "description": "Auditor login. The password grant is enabled for tests and the README demo only.",
       "enabled": true,
@@ -239,6 +275,14 @@
       "username": "service-account-partner-without-tenant",
       "enabled": true,
       "serviceAccountClientId": "partner-without-tenant",
+      "realmRoles": [
+        "partner"
+      ]
+    },
+    {
+      "username": "service-account-partner-blank-tenant",
+      "enabled": true,
+      "serviceAccountClientId": "partner-blank-tenant",
       "realmRoles": [
         "partner"
       ]
