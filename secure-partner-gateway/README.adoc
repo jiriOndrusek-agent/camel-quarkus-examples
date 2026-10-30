@@ -14,6 +14,9 @@ Partner systems submit orders to the gateway. The gateway authenticates and auth
 apart, validates, deduplicates and rate-limits the orders, stores them and writes a tamper-evident audit trail.
 Auditors query and verify that trail.
 
+The link:docs/architecture.adoc[architecture guide] shows the components and the request flow, and lists the known
+limitations.
+
 [cols="2,1,5"]
 |===
 |Endpoint |Role |Behavior
@@ -36,7 +39,8 @@ above the rate limit.
 
 |`GET /api/audit/verify`
 |`auditor`
-|Recomputes the hash chain: `{"valid":true,"checked":42}` or `{"valid":false,"checked":6,"brokenAtSeq":7}`.
+|Recomputes the hash chain: `{"valid":true,"checked":42}` or `{"valid":false,"checked":6,"brokenAtSeq":7}`. Both are
+answered with `200`: check `valid`, not the status.
 |===
 
 Every endpoint answers `401` without a valid token, and `403` for the wrong role, a path or method that is not listed,
@@ -194,8 +198,8 @@ Camel:
 * `CallerIdentity` reads the `SecurityIdentity` that Quarkus verified (header `CamelVertxPlatformHttpAuthenticatedUser`)
 into exchange properties. The tenant is the signed `partner_id` claim, never a header or a body field. A partner token
 without that claim, or with a blank one, gets `403`.
-* Trust boundary: right after that, `removeHeaders("*", <inputs of the route>)` drops `Authorization`, `Cookie`,
-`Camel*` and spoofed ids. Caller tokens are never forwarded.
+* Trust boundary: next, `removeHeaders("*", <inputs of the route>)` drops `Authorization`, `Cookie`, `Camel*` and
+spoofed ids. Caller tokens are never forwarded. Only the order route looks at a header first, the `Content-Type`.
 * `ResponseHeaderFilter`, the header filter of `platform-http`, lets only `Retry-After` into responses. Request headers
 are never echoed, also not by answers before `removeHeaders`, like the `403` above.
 * `OrderService` enforces tenant ownership.
@@ -217,9 +221,10 @@ Records come from three places, all through `AuditLog.append()`:
 
 . Business events, in the same transaction as the change: `ORDER_ACCEPTED`, `ORDER_REPLAYED`, `ORDER_READ`,
 `AUDIT_QUERIED`, `AUDIT_VERIFIED`. Rejections and failures come from the `onException` handlers: `REQUEST_REJECTED`,
-`ORDER_READ_DENIED`, `REQUEST_FAILED`.
+`ORDER_READ_DENIED`, `REQUEST_FAILED`, and `AUTHZ_DENIED` for a partner token without tenant.
 . `SecurityEventAuditor` observes the Quarkus `AuthenticationFailureEvent` and `AuthorizationFailureEvent`:
-`AUTHN_FAILED`, `AUTHZ_DENIED`. These are the `401` and `403` answers that Camel never sees.
+`AUTHN_FAILED` (invalid token) and `AUTHZ_DENIED` (no token, wrong role, path or method). These are the `401` and `403`
+answers that Camel never sees.
 . `CamelLifecycleAuditor` observes Camel events through the Camel Quarkus CDI event bridge: `CONTEXT_STARTED`,
 `ROUTE_STARTED`, `ROUTE_STOPPED`, `ROUTE_RELOADED`.
 
@@ -231,8 +236,9 @@ Tamper evidence:
 * `/api/audit/verify` recomputes the chain and reports the first missing, altered or misplaced `seq`. It cannot see
 records cut from the end when `audit_chain_head` is rewound as well (that needs the database owner, the trigger blocks
 `DELETE`): only the anchors below reveal that.
-* The `audit-anchor` route logs the chain head every 5 minutes (`audit.anchor-period`), an anchor outside of the
-database.
+* The `audit-anchor` route logs the chain head (`Audit chain head: seq=... hash=...`) every 5 minutes
+(`audit.anchor-period`), an anchor outside of the database. The gateway only writes the anchors, nothing reads or
+compares them.
 * The metric `audit_events_total{action,outcome}` counts the records.
 
 Limits:
@@ -242,8 +248,10 @@ consistently. Only anchors kept outside of the database reveal that.
 * Appends are serialized. A verification loads the whole chain into memory and blocks appends meanwhile.
 * Rotating the HMAC key needs a key id in each record, which is not implemented.
 * Real compliance needs external anchoring, for example a SIEM, WORM storage or a timestamping service.
-* The `413` of the HTTP layer and the `415` and `406` of `platform-http` happen before the route: they are plain
-answers, not `application/problem+json`, and they are not audited.
+* The `413` of the HTTP layer, the `415` and `406` of `platform-http` and the `400` for a request that cannot be parsed
+(for example `%zz` in the path or query) happen before the route: they are plain answers, not
+`application/problem+json`, and they are not audited. Malformed JSON is not one of them: the route answers `400` and
+audits it.
 * The `Idempotency-Key` is committed in its own transaction just before the order. If the gateway stops in between, the
 key stays without order and its retries get `409` until the key is deleted from `camel_messageprocessed`.
 * Idempotency keys are never deleted, `camel_messageprocessed` grows without limit.
@@ -262,7 +270,8 @@ appends are serialized.
 and make the proxy replace `X-Forwarded-For` with the client address instead of appending to it: Quarkus takes the
 first address, which clients can set.
 * Decide retention and access for the audit trail, it holds user names and IP addresses.
-* Ship the JSON logs, with the `audit-anchor` lines, to a SIEM that the database administrators cannot change.
+* Ship the JSON logs, with the `audit-anchor` lines, to a SIEM that the database administrators cannot change. Compare
+these anchors with the chain yourself, the gateway does not.
 * Plan the HMAC key rotation (see the limits above).
 * Give the application database role `INSERT` and `SELECT` only on `audit_event`, and run Flyway with another role.
 * Register each partner as its own client. Auditors log in with the authorization code flow, not the password grant.
