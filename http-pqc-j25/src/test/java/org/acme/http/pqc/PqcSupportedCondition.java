@@ -47,7 +47,7 @@ class PqcSupportedCondition implements ExecutionCondition {
             return false;
         }
         try {
-            String[] groups = NamedGroups.get(SSLContext.getDefault().getSupportedSSLParameters());
+            String[] groups = NamedGroups.get(SSLContext.getDefault().getDefaultSSLParameters());
             return groups != null && Arrays.asList(groups).contains(HYBRID_GROUP);
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);

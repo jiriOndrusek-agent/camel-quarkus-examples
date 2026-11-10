@@ -74,7 +74,7 @@ abstract class AbstractPqcTest {
                     .get("/pqc/secure")
                     .then()
                     .statusCode(200)
-                    .body(containsString("Post-Quantum Cryptography"));
+                    .body(containsString("Secure data delivered"));
         } else {
             assertThrows(SSLException.class, () -> request(namedGroups, true).get("/pqc/secure"));
         }

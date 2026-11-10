@@ -295,6 +295,16 @@
     </build>
 
     <profiles>
+        <!-- Disable CI testing (JVM and native) for this example because CI runs with jdk 17, same as http-pqc-j21 -->
+        <profile>
+            <id>jdk-17</id>
+            <activation>
+                <jdk>17</jdk>
+            </activation>
+            <properties>
+                <maven.test.skip>true</maven.test.skip>
+            </properties>
+        </profile>
         <profile>
             <id>native</id>
             <activation>

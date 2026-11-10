@@ -21,8 +21,9 @@ import java.util.Map;
 import io.quarkus.test.junit.QuarkusTestProfile;
 
 /**
- * PQC-only server: same key exchange groups as the main config, only the policy is switched to {@code strict},
- * so it is the policy that rejects classical-only clients.
+ * PQC-only server: the policy is switched to {@code strict}. Vert.x then replaces the configured key exchange groups
+ * with the hybrid PQC groups (X25519MLKEM768, SecP256r1MLKEM768, SecP384r1MLKEM1024), so classical-only clients are
+ * rejected.
  */
 public class PqcOnlyProfile implements QuarkusTestProfile {
 

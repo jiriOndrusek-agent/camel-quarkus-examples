@@ -72,6 +72,8 @@ For running the application by hand, the Maven build (`generate-resources` phase
 
 The tests generate their own certificates in `target/test-certs/` (`@Certificates` on `AbstractPqcTest`) and use them via the `%test` profile.
 
+The generated keys and the `changeit` passwords are for demo only, do not reuse them.
+
 The certificates use classical RSA signatures. The post-quantum protection comes from the key exchange, which defeats "harvest now, decrypt later" attacks on recorded traffic.
 
 == Start in Development Mode
@@ -83,7 +85,7 @@ mvn clean compile quarkus:dev
 
 The application starts on a random HTTPS port with mutual TLS. Look for `Listening on: https://localhost:xxxxx` in the log. Endpoint: `/pqc/secure`.
 
-Any JDK 25.0.5+ client offers X25519MLKEM768 by default. Clients without PQC support (e.g. most `curl` builds) fall back to x25519 thanks to `client-negotiated`:
+Any JDK 25.0.5+ client offers X25519MLKEM768 by default. `curl` built with OpenSSL 3.5+ also negotiates X25519MLKEM768; clients without PQC support fall back to a classical group thanks to `client-negotiated`:
 
 [source,shell]
 ----

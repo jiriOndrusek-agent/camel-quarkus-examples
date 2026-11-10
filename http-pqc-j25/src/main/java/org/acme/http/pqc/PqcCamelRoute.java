@@ -25,13 +25,12 @@ import org.apache.camel.builder.endpoint.EndpointRouteBuilder;
 @ApplicationScoped
 public class PqcCamelRoute extends EndpointRouteBuilder {
 
-    private static final String SECURE_RESPONSE = "Secure data delivered via Post-Quantum Cryptography (PQC)!\n\n" +
+    private static final String SECURE_RESPONSE = "Secure data delivered over mutual TLS.\n\n" +
             "Connection details:\n" +
-            "- TLS version: 1.3\n" +
-            "- Key exchange: X25519MLKEM768 (hybrid PQC)\n" +
+            "- TLS key exchange: negotiated according to the server's PQC policy\n" +
             "- Provider: SunJSSE (JDK 25, no Bouncy Castle)\n\n" +
-            "This connection combines classical X25519 ECDH with quantum-resistant ML-KEM-768,\n" +
-            "providing security against both classical and quantum computing attacks.";
+            "The hybrid X25519MLKEM768 key exchange protects the session key against\n" +
+            "harvest-now-decrypt-later attacks. Authentication is classical (RSA).";
 
     @Override
     public void configure() throws Exception {
