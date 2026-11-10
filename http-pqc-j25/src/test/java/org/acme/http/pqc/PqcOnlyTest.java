@@ -45,4 +45,9 @@ class PqcOnlyTest extends AbstractPqcTest {
     void classicalClientIsRejected() {
         assertRejected(CLASSICAL_GROUPS);
     }
+
+    @Test
+    void clientWithoutCertificateIsRejected() {
+        assertRejectedWithoutClientCertificate();
+    }
 }

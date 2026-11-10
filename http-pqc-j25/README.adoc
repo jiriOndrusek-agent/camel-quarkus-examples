@@ -21,12 +21,14 @@ Unlike the `http-pqc-j21` example, it uses **no Bouncy Castle at all**:
 
 | Certificates
 | Generated at startup with the Bouncy Castle X.509 API
-| Generated at build time with the JDK `keytool`
+| Generated at build/test time with the SmallRye certificate generator
 
-| Extra dependencies
+| Extra runtime dependencies
 | `camel-quarkus-support-bouncycastle`, `bctls-jdk18on`
 | none
 |===
+
+NOTE: TLS is pure JDK. Bouncy Castle is used only at build and test time, by the SmallRye certificate generator (Maven plugin and the `test` scoped `smallrye-certificate-generator-junit5`). It is not on the application classpath: `mvn dependency:tree -Dscope=runtime` and `target/quarkus-app/lib` contain no Bouncy Castle jar.
 
 IMPORTANT: Requires a JDK with X25519MLKEM768 in SunJSSE (https://openjdk.org/jeps/527[JEP 527]): **JDK 25.0.5 (October 2026 update) or newer, or JDK 27+**. On older JDK 25 builds the application fails at startup with `PQC enforcement policy ... requires X25519MLKEM768 but the configured SSL engine does not support it`. Check your JDK (the output must contain `X25519MLKEM768`):
 
@@ -35,7 +37,7 @@ IMPORTANT: Requires a JDK with X25519MLKEM768 in SunJSSE (https://openjdk.org/je
 echo 'System.out.println(String.join(",", javax.net.ssl.SSLContext.getDefault().getSupportedSSLParameters().getNamedGroups()))' | jshell -q
 ----
 
-NOTE: CI runs with JDK 17 and 21, therefore the tests of this example are skipped there (via the `jdk-older-than-25` profile).
+The tests detect the support at runtime (`PqcSupportedCondition` checks the JDK's supported TLS named groups) and are skipped on JDKs without X25519MLKEM768, e.g. JDK 25.0.0 - 25.0.4. On JDK 17 and 21 (CI) the tests are not even compiled (`jdk-older-than-25` profile), the example is only built.
 
 TIP: Check the https://camel.apache.org/camel-quarkus/latest/first-steps.html[Camel Quarkus User guide] for prerequisites and other general information.
 
@@ -59,17 +61,19 @@ quarkus.tls.pqc-enforcement-policy = client-negotiated
 
 Both `client-negotiated` and `strict` fail at startup when the JDK does not support X25519MLKEM768, so the server never silently falls back to classical-only TLS.
 
-== Certificates
+== Mutual TLS and certificates
 
-The Maven build (`generate-resources` phase) runs `keytool` to create fresh demo certificates in `target/certs/` (password `changeit`):
+The server requires a client certificate (`quarkus.http.ssl.client-auth = required`) and trusts only the demo client certificate (`quarkus.tls.trust-store`), in both the default and the `strict` setup. Clients without a certificate are rejected during the TLS handshake.
 
-* `server-keystore.p12`, `server-truststore.p12` - server identity (`CN=localhost`, SAN `localhost`, `127.0.0.1`) and trusted client
-* `client-keystore.p12`, `client-truststore.p12` - client identity and trusted server
-* `server-cert.pem`, `client-cert.pem` - the same certificates in PEM form (e.g. for `curl --cacert`)
+For running the application by hand, the Maven build (`generate-resources` phase) creates demo certificates in `target/certs/` with the `smallrye-certificate-generator-maven-plugin` (password `changeit`, valid 365 days):
+
+* `pqc-keystore.p12`, `pqc-server-truststore.p12` - server identity (`CN=localhost`, SAN `localhost`, `127.0.0.1`) and trusted client
+* `pqc-client-keystore.p12`, `pqc-client-truststore.p12` - client identity and trusted server
+* `pqc.crt`, `pqc-client.crt`, `pqc-client.key`, `pqc-client-ca.crt`, ... - the same in PEM form (e.g. for `curl`)
+
+The tests generate their own certificates in `target/test-certs/` (`@Certificates` on `AbstractPqcTest`) and use them via the `%test` profile.
 
 The certificates use classical RSA signatures. The post-quantum protection comes from the key exchange, which defeats "harvest now, decrypt later" attacks on recorded traffic.
-
-TIP: JDK 24+ `keytool` can also create ML-DSA certificates (`-keyalg ML-DSA-65`). This example keeps RSA because ML-DSA signatures in TLS are not yet supported by SunJSSE in JDK 25.
 
 == Start in Development Mode
 
@@ -84,8 +88,8 @@ Any JDK 25.0.5+ client offers X25519MLKEM768 by default. Clients without PQC sup
 
 [source,shell]
 ----
-curl --cert target/certs/client-keystore.p12:changeit --cert-type P12 \
-     --cacert target/certs/server-cert.pem \
+curl --cert target/certs/pqc-client.crt --key target/certs/pqc-client.key \
+     --cacert target/certs/pqc-client-ca.crt \
      https://localhost:xxxxx/pqc/secure
 ----
 
@@ -124,8 +128,8 @@ mvn clean test
 
 The tests call the server with the JDK TLS stack, restricting the named groups offered by the client:
 
-* `PqcWithFallbackTest` (`client-negotiated`): hybrid client ✓, classical-only client (`x25519,secp256r1`) ✓
-* `PqcOnlyTest` (`strict`, via `PqcOnlyProfile`): hybrid client ✓, JDK default client ✓, classical-only client ✗ (TLS handshake fails)
+* `PqcWithFallbackTest` (`client-negotiated`): hybrid client ✓, classical-only client (`x25519,secp256r1`) ✓, client without certificate ✗
+* `PqcOnlyTest` (`strict`, via `PqcOnlyProfile`): hybrid client ✓, JDK default client ✓, classical-only client ✗ (TLS handshake fails), client without certificate ✗
 
 Native mode runs `PqcWithFallbackIT` only, because a native executable is built with one configuration:
 

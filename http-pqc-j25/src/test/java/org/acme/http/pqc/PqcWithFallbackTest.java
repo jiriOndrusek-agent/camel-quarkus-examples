@@ -35,4 +35,9 @@ class PqcWithFallbackTest extends AbstractPqcTest {
     void classicalClientIsAccepted() throws Exception {
         assertAccepted(CLASSICAL_GROUPS);
     }
+
+    @Test
+    void clientWithoutCertificateIsRejected() {
+        assertRejectedWithoutClientCertificate();
+    }
 }
