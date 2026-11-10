@@ -21,14 +21,13 @@ import java.util.Map;
 import io.quarkus.test.junit.QuarkusTestProfile;
 
 /**
- * PQC-only server: accepts only the hybrid X25519MLKEM768 key exchange, no classical fallback.
+ * PQC-only server: same key exchange groups as the main config, only the policy is switched to {@code strict},
+ * so it is the policy that rejects classical-only clients.
  */
 public class PqcOnlyProfile implements QuarkusTestProfile {
 
     @Override
     public Map<String, String> getConfigOverrides() {
-        return Map.of(
-                "quarkus.tls.key-exchange-groups", "X25519MLKEM768",
-                "quarkus.tls.pqc-enforcement-policy", "strict");
+        return Map.of("quarkus.tls.pqc-enforcement-policy", "strict");
     }
 }

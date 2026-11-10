@@ -55,7 +55,7 @@ quarkus.tls.pqc-enforcement-policy = client-negotiated
 
 * `client-negotiated` (default here): X25519MLKEM768 is preferred, classical clients can still connect. Use it for gradual migration.
 * `strict`: only post-quantum hybrid groups are accepted, classical clients are rejected.
-* `relaxed` (Quarkus default): PQC is not enforced and the post-quantum groups are ignored. Do not use it for this purpose.
+* `relaxed` (Quarkus default): the configured groups are still applied as-is, but PQC is neither enforced nor checked at startup (Quarkus logs a warning saying the groups are ignored). Do not use it for this purpose.
 
 Both `client-negotiated` and `strict` fail at startup when the JDK does not support X25519MLKEM768, so the server never silently falls back to classical-only TLS.
 
