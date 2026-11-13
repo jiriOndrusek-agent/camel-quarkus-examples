@@ -16,9 +16,11 @@
  */
 package org.acme.partner.gateway.audit;
 
+import io.quarkus.runtime.ShutdownEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
+import org.apache.camel.CamelContext;
 import org.apache.camel.spi.CamelEvent;
 
 /**
@@ -30,6 +32,9 @@ public class CamelLifecycleAuditor {
     @Inject
     AuditLog auditLog;
 
+    @Inject
+    CamelContext camelContext;
+
     void onContextStarted(@Observes CamelEvent.CamelContextStartedEvent event) {
         audit("CONTEXT_STARTED", "camel-context/" + event.getContext().getName());
     }
@@ -38,7 +43,16 @@ public class CamelLifecycleAuditor {
         audit("ROUTE_STARTED", "route/" + event.getRoute().getRouteId());
     }
 
+    // Quarkus fires ShutdownEvent before it stops Camel and closes the EntityManagerFactory
+    void onShutdown(@Observes ShutdownEvent event) {
+        audit("CONTEXT_STOPPING", "camel-context/" + camelContext.getName());
+    }
+
     void onRouteStopped(@Observes CamelEvent.RouteStoppedEvent event) {
+        // Camel and Hibernate stop in no defined order, the CONTEXT_STOPPING record covers the routes stopped then
+        if (event.getRoute().getCamelContext().isStopping()) {
+            return;
+        }
         audit("ROUTE_STOPPED", "route/" + event.getRoute().getRouteId());
     }
 

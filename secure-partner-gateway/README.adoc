@@ -72,7 +72,8 @@ link:src/main/resources/db/migration/V1.0.0__gateway_schema.sql[V1.0.0__gateway_
 link:src/main/java/org/acme/partner/gateway/audit/AuditLog.java[AuditLog]
 . *External anchor*: a timer logs the chain head, to be kept outside of the database.
 link:src/main/java/org/acme/partner/gateway/GatewayRoutes.java[GatewayRoutes]
-. *Security and Camel lifecycle events audited*: `401`, `403`, context and route changes are in the trail.
+. *Security and Camel lifecycle events audited*: `401`, `403`, context start and shutdown, route start, stop and reload are
+in the trail.
 link:src/main/java/org/acme/partner/gateway/audit/SecurityEventAuditor.java[SecurityEventAuditor], link:src/main/java/org/acme/partner/gateway/audit/CamelLifecycleAuditor.java[CamelLifecycleAuditor]
 . *RFC 9457 errors*: `application/problem+json` without exception details. link:src/main/java/org/acme/partner/gateway/ErrorHandling.java[ErrorHandling],
 link:src/main/java/org/acme/partner/gateway/Problem.java[Problem]
@@ -265,7 +266,8 @@ Records come from three places, all through `AuditLog.append()`:
 . `SecurityEventAuditor` observes the Quarkus `AuthenticationFailureEvent` and `AuthorizationFailureEvent`:
 `AUTHN_FAILED`, `AUTHZ_DENIED`. These are the `401` and `403` answers that Camel never sees.
 . `CamelLifecycleAuditor` observes Camel events through the Camel Quarkus CDI event bridge: `CONTEXT_STARTED`,
-`ROUTE_STARTED`, `ROUTE_STOPPED`, `ROUTE_RELOADED`.
+`ROUTE_STARTED`, `ROUTE_STOPPED`, `ROUTE_RELOADED`. At shutdown it writes one `CONTEXT_STOPPING` record from the Quarkus
+`ShutdownEvent`, while the database is still open; the routes stopped by the shutdown get no own record.
 
 Tamper evidence:
 

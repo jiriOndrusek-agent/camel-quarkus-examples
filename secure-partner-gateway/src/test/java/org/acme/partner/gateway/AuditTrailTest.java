@@ -22,8 +22,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
+import io.quarkus.arc.Arc;
+import io.quarkus.test.junit.DisabledOnIntegrationTest;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
+import org.apache.camel.CamelContext;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
 
@@ -83,6 +86,19 @@ class AuditTrailTest extends AbstractGatewayTest {
                 "SUCCESS");
         assertAudited(audit("?action=ROUTE_STARTED&limit=100"), "ROUTE_STARTED", "route/order-create", "gateway",
                 "SYSTEM", null, "SUCCESS");
+    }
+
+    @Test
+    @DisabledOnIntegrationTest("Stops a route through the CamelContext bean")
+    void routeStoppedWhileRunningIsAudited() throws Exception {
+        long start = lastSeq();
+        CamelContext context = Arc.container().instance(CamelContext.class).get();
+        context.getRouteController().stopRoute("audit-anchor");
+        context.getRouteController().startRoute("audit-anchor");
+
+        List<Map<String, Object>> events = since(start);
+        assertAudited(events, "ROUTE_STOPPED", "route/audit-anchor", "gateway", "SYSTEM", null, "SUCCESS");
+        assertAudited(events, "ROUTE_STARTED", "route/audit-anchor", "gateway", "SYSTEM", null, "SUCCESS");
     }
 
     @Test
