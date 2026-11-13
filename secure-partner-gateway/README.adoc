@@ -1,5 +1,5 @@
 = Secure Partner Gateway: A Camel Quarkus example
-:cq-example-description: An example that shows how to secure platform-http REST endpoints with Quarkus OIDC, enforce tenant isolation and keep a tamper-evident audit trail
+:cq-example-description: An example that serves as a reference for securing and auditing an HTTP API: OIDC authentication, RBAC, tenant isolation, idempotency and a tamper-evident audit trail
 
 {cq-description}
 
@@ -43,6 +43,50 @@ Every endpoint answers `401` without a valid token, and `403` for the wrong role
 or a partner token without the `partner_id` claim or with a blank one.
 Health and metrics are only on the management port `9876`: `/observe/health` and `/observe/metrics`.
 Outside of dev mode and tests, the logs are JSON with the MDC fields `partnerId` and `camel.exchangeId`.
+
+== Features
+
+Each line says what the gateway does and why, with links to the code.
+
+. *OIDC bearer auth*: tokens are verified locally, Keycloak comes from Dev Services in dev mode and tests.
+link:src/main/resources/application.properties[application.properties], link:config/gateway-realm.json[gateway-realm.json]
+. *Deny-by-default RBAC*: everything is denied, then single paths and methods are allowed to one role, so a new
+endpoint is closed until listed. link:src/main/resources/application.properties[application.properties]
+. *Tenant isolation*: the partner comes from the signed `partner_id` claim, never from a header or the body.
+link:src/main/java/org/acme/partner/gateway/CallerIdentity.java[CallerIdentity], link:src/main/java/org/acme/partner/gateway/order/OrderService.java[OrderService]
+. *Header allow-list*: requests keep only the headers a route declares, responses only `Retry-After`, so tokens and
+spoofed headers go nowhere. link:src/main/java/org/acme/partner/gateway/GatewayRoutes.java[GatewayRoutes], link:src/main/java/org/acme/partner/gateway/ResponseHeaderFilter.java[ResponseHeaderFilter]
+. *Per-partner throttle*: `429` with `Retry-After`, one partner cannot starve the others.
+link:src/main/java/org/acme/partner/gateway/GatewayRoutes.java[GatewayRoutes], link:src/main/java/org/acme/partner/gateway/ErrorHandling.java[ErrorHandling]
+. *Input validation*: JSON schema, `Idempotency-Key` pattern, 64 KB body limit and `application/json` only.
+link:src/main/resources/schema/order.json[order.json], link:src/main/java/org/acme/partner/gateway/GatewayRoutes.java[GatewayRoutes]
+. *JDBC idempotent consumer*: retries with the same `partnerId:Idempotency-Key` get the first order, concurrent ones
+create one order. link:src/main/java/org/acme/partner/gateway/GatewayRoutes.java[GatewayRoutes],
+link:src/main/resources/db/migration/V1.0.0__gateway_schema.sql[V1.0.0__gateway_schema.sql]
+. *HMAC-chained audit trail*: each record is chained to the previous one, so changes are detectable.
+link:src/main/java/org/acme/partner/gateway/audit/AuditChain.java[AuditChain], link:src/main/java/org/acme/partner/gateway/audit/AuditLog.java[AuditLog]
+. *`/api/audit` and `/api/audit/verify`*: auditors query and verify the trail. link:src/main/java/org/acme/partner/gateway/audit/AuditLog.java[AuditLog]
+. *Append-only audit table*: database triggers reject `UPDATE`, `DELETE` and `TRUNCATE`.
+link:src/main/resources/db/migration/V1.0.0__gateway_schema.sql[V1.0.0__gateway_schema.sql]
+. *HMAC key checks at startup*: no key, a short key or a placeholder stops the startup.
+link:src/main/java/org/acme/partner/gateway/audit/AuditLog.java[AuditLog]
+. *External anchor*: a timer logs the chain head, to be kept outside of the database.
+link:src/main/java/org/acme/partner/gateway/GatewayRoutes.java[GatewayRoutes]
+. *Security and Camel lifecycle events audited*: `401`, `403`, context and route changes are in the trail.
+link:src/main/java/org/acme/partner/gateway/audit/SecurityEventAuditor.java[SecurityEventAuditor], link:src/main/java/org/acme/partner/gateway/audit/CamelLifecycleAuditor.java[CamelLifecycleAuditor]
+. *RFC 9457 errors*: `application/problem+json` without exception details. link:src/main/java/org/acme/partner/gateway/ErrorHandling.java[ErrorHandling],
+link:src/main/java/org/acme/partner/gateway/Problem.java[Problem]
+. *Ops*: health and metrics on the management port only, JSON logs with the MDC fields `partnerId` and
+`camel.exchangeId`. link:src/main/resources/application.properties[application.properties]
+. *JVM and native tests*: every `*Test` has an `*IT` that runs it against the packaged application.
+link:src/test/java/org/acme/partner/gateway/SecurityTest.java[SecurityTest], link:src/test/java/org/acme/partner/gateway/OrderApiTest.java[OrderApiTest], link:src/test/java/org/acme/partner/gateway/AuditTrailTest.java[AuditTrailTest],
+link:src/test/java/org/acme/partner/gateway/AuditImmutabilityTest.java[AuditImmutabilityTest]
+
+=== Reuse
+
+Other examples can copy these parts instead of covering the same concerns: the auth and RBAC configuration in
+`application.properties`, the header allow-list (`removeHeaders` and `ResponseHeaderFilter`), the audit chain
+(`audit` package and the Flyway schema) and the JDBC idempotent consumer.
 
 == Prerequisites
 
@@ -202,8 +246,7 @@ are never echoed, also not by answers before `removeHeaders`, like the `403` abo
 * `OrderService` enforces tenant ownership.
 * Per partner rate limit (Throttle EIP, `429` with `Retry-After`), JSON schema `schema/order.json` (no additional
 fields, also rejects malformed JSON and text after the order), idempotency per `partnerId:Idempotency-Key` with the
-`JpaMessageIdRepository`. `IdempotencyKeyRepository` makes it also see a concurrent insert of the same key on
-PostgreSQL as a duplicate.
+camel-sql `JdbcMessageIdRepository`. Its primary key turns a concurrent insert of the same key into a duplicate.
 * One `routeConfiguration()` maps errors to RFC 9457 `application/problem+json`, without exception details.
 
 == Audit design
