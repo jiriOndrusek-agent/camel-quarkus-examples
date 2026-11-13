@@ -18,17 +18,18 @@ package org.acme.partner.gateway;
 
 import java.time.Duration;
 
+import javax.sql.DataSource;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import jakarta.persistence.EntityManagerFactory;
 import org.acme.partner.gateway.audit.AuditLog;
 import org.acme.partner.gateway.order.OrderRequest;
 import org.acme.partner.gateway.order.OrderService;
 import org.apache.camel.Exchange;
 import org.apache.camel.builder.RouteBuilder;
 import org.apache.camel.component.jackson.JacksonDataFormat;
-import org.apache.camel.component.jpa.TransactionStrategy;
+import org.apache.camel.processor.idempotent.jdbc.JdbcMessageIdRepository;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 @ApplicationScoped
@@ -49,10 +50,7 @@ public class GatewayRoutes extends RouteBuilder {
     ObjectMapper mapper;
 
     @Inject
-    EntityManagerFactory entityManagerFactory;
-
-    @Inject
-    TransactionStrategy transactionStrategy;
+    DataSource dataSource;
 
     @ConfigProperty(name = "gateway.throttle.max-requests")
     long throttleMaxRequests;
@@ -66,6 +64,11 @@ public class GatewayRoutes extends RouteBuilder {
     @Override
     public void configure() {
         JacksonDataFormat json = new JacksonDataFormat(mapper, Object.class);
+
+        // Primary key (processorName, messageId): a concurrent duplicate fails the insert and counts as a duplicate.
+        // Flyway creates the table.
+        JdbcMessageIdRepository idempotentRepository = new JdbcMessageIdRepository(dataSource, "order-create");
+        idempotentRepository.setCreateTableIfNotExists(false);
 
         // platform-http answers 415 for a wrong Content-Type and 406 for an unacceptable Accept header. Malformed JSON
         // is left to the schema validation of the route, behind the trust boundary.
@@ -89,7 +92,7 @@ public class GatewayRoutes extends RouteBuilder {
                 .unmarshal(new JacksonDataFormat(mapper, OrderRequest.class))
                 // keys are scoped to the partner, so partners cannot collide with or probe each other's keys
                 .idempotentConsumer(simple("${exchangeProperty.partnerId}:${header.Idempotency-Key}"),
-                        new IdempotencyKeyRepository(entityManagerFactory, transactionStrategy))
+                        idempotentRepository)
                 .skipDuplicate(false)
                 .completionEager(true)
                 .filter(exchangeProperty(Exchange.DUPLICATE_MESSAGE).isNull())

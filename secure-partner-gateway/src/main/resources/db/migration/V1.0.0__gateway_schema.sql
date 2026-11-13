@@ -26,16 +26,14 @@ CREATE TABLE partner_order (
     CONSTRAINT partner_order_idempotency_key UNIQUE (partner_id, idempotency_key)
 );
 
--- Used by the Camel JpaMessageIdRepository (idempotent consumer)
-CREATE TABLE camel_messageprocessed (
-    id BIGINT NOT NULL PRIMARY KEY,
-    createdAt TIMESTAMP(6),
-    messageId VARCHAR(255),
-    processorName VARCHAR(255),
-    CONSTRAINT camel_messageprocessed_key UNIQUE (processorName, messageId)
+-- Used by the Camel JdbcMessageIdRepository (idempotent consumer). The default table of camel-sql, with a longer
+-- messageId for the partnerId:Idempotency-Key keys.
+CREATE TABLE CAMEL_MESSAGEPROCESSED (
+    processorName VARCHAR(255) NOT NULL,
+    messageId VARCHAR(255) NOT NULL,
+    createdAt TIMESTAMP,
+    PRIMARY KEY (processorName, messageId)
 );
-
-CREATE SEQUENCE camel_messageprocessed_seq START WITH 1 INCREMENT BY 50;
 
 -- Hash-chained audit trail
 CREATE TABLE audit_event (

@@ -28,7 +28,7 @@
     <description>Camel Quarkus Example :: Secure Partner Gateway</description>
 
     <properties>
-        <quarkus.platform.version>3.40.1</quarkus.platform.version>
+        <quarkus.platform.version>4.0.0.CR1</quarkus.platform.version>
         <camel-quarkus.platform.version>4.0.0-SNAPSHOT</camel-quarkus.platform.version>
 
         <quarkus.platform.group-id>io.quarkus</quarkus.platform.group-id>
@@ -84,20 +84,13 @@
         </dependency>
         <dependency>
             <groupId>org.apache.camel.quarkus</groupId>
-            <artifactId>camel-quarkus-jpa</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.camel.quarkus</groupId>
             <artifactId>camel-quarkus-json-validator</artifactId>
         </dependency>
         <dependency>
             <groupId>org.apache.camel.quarkus</groupId>
             <artifactId>camel-quarkus-mdc</artifactId>
         </dependency>
-        <!--
-            Health and metrics. Not camel-quarkus-observability-services: its JMX part (camel-quarkus-management)
-            breaks the native build together with camel-quarkus-jpa
-        -->
+        <!-- Health and metrics -->
         <dependency>
             <groupId>org.apache.camel.quarkus</groupId>
             <artifactId>camel-quarkus-micrometer</artifactId>
@@ -116,7 +109,15 @@
         </dependency>
         <dependency>
             <groupId>org.apache.camel.quarkus</groupId>
+            <artifactId>camel-quarkus-sql</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.camel.quarkus</groupId>
             <artifactId>camel-quarkus-timer</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
@@ -125,6 +126,10 @@
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-hibernate-orm</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
