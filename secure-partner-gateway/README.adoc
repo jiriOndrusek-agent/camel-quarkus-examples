@@ -68,7 +68,9 @@ link:src/main/resources/db/migration/V1.0.0__gateway_schema.sql[V1.0.0__gateway_
 . *HMAC-chained audit trail*: each record is chained to the previous one, so changes are detectable.
 link:src/main/java/org/acme/partner/gateway/audit/AuditChain.java[AuditChain], link:src/main/java/org/acme/partner/gateway/audit/AuditLog.java[AuditLog]
 . *`/api/audit` and `/api/audit/verify`*: auditors query and verify the trail. link:src/main/java/org/acme/partner/gateway/audit/AuditLog.java[AuditLog]
-. *Append-only audit table*: database triggers reject `UPDATE`, `DELETE` and `TRUNCATE`.
+. *Append-only audit table*: database triggers reject `UPDATE`, `DELETE` and `TRUNCATE`. Flyway runs as the schema
+owner, the application as `gateway_app` with `INSERT` and `SELECT` only on `audit_event`, so it cannot remove the
+triggers.
 link:src/main/resources/db/migration/V1.0.0__gateway_schema.sql[V1.0.0__gateway_schema.sql]
 . *HMAC key checks at startup*: no key, a short key or a placeholder stops the startup.
 link:src/main/java/org/acme/partner/gateway/audit/AuditLog.java[AuditLog]
@@ -155,7 +157,11 @@ Outside of dev mode, nothing has a default. Without these variables the applicat
 ----
 export QUARKUS_OIDC_AUTH_SERVER_URL=https://keycloak.example.com/realms/gateway
 export QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://db.example.com:5432/gateway
-export QUARKUS_DATASOURCE_USERNAME=gateway
+# the schema owner runs the Flyway migration
+export QUARKUS_FLYWAY_USERNAME=gateway_owner
+export QUARKUS_FLYWAY_PASSWORD=<password>
+# the application role, created by the database administrator, gets its grants from the migration
+export QUARKUS_DATASOURCE_USERNAME=gateway_app
 export QUARKUS_DATASOURCE_PASSWORD=<password>
 export AUDIT_HMAC_KEY=$(openssl rand -base64 32)
 ----
@@ -254,7 +260,8 @@ Tamper evidence:
 
 * `hash(n) = HMAC-SHA256(key, canonical(record n) || hash(n-1))`, the key comes from `AUDIT_HMAC_KEY`.
 * Every append locks the single row of `audit_chain_head`, so the chain stays linear.
-* A database trigger rejects `UPDATE`, `DELETE` and `TRUNCATE` on `audit_event`.
+* A database trigger rejects `UPDATE`, `DELETE` and `TRUNCATE` on `audit_event`. The application role `gateway_app`
+has only `INSERT` and `SELECT` on it and does not own it, so it cannot drop or disable the trigger.
 * `/api/audit/verify` recomputes the chain and reports the first missing, altered or misplaced `seq`. It cannot see
 records cut from the end when `audit_chain_head` is rewound as well (that needs the database owner, the trigger blocks
 `DELETE`): only the anchors below reveal that.
@@ -288,7 +295,8 @@ first address, which clients can set.
 * Decide retention and access for the audit trail, it holds user names and IP addresses.
 * Ship the JSON logs, with the `audit-anchor` lines, to a SIEM that the database administrators cannot change.
 * Plan the HMAC key rotation (see the limits above).
-* Give the application database role `INSERT` and `SELECT` only on `audit_event`, and run Flyway with another role.
+* Create the role `gateway_app` for the application, and run Flyway as the schema owner, as shown above. The migration
+grants `gateway_app` only `INSERT` and `SELECT` on `audit_event`.
 * Register each partner as its own client. Auditors log in with the authorization code flow, not the password grant.
 
 == Feedback
