@@ -17,14 +17,19 @@
 package org.acme.partner.gateway;
 
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 
 import javax.sql.DataSource;
 
+import io.netty.handler.codec.http.QueryStringDecoder;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.acme.partner.gateway.audit.AuditLog;
 import org.acme.partner.gateway.order.OrderService;
 import org.apache.camel.Exchange;
+import org.apache.camel.Message;
+import org.apache.camel.Processor;
 import org.apache.camel.builder.RouteBuilder;
 import org.apache.camel.processor.idempotent.jdbc.JdbcMessageIdRepository;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -77,10 +82,14 @@ public class GatewayRoutes extends RouteBuilder {
                 .get("/audit/verify").produces("application/json").to("direct:audit-verify");
 
         // Every route starts at the trust boundary: the caller comes from the verified token, then all request
-        // headers are dropped except the inputs the route declares (Authorization, Cookie, Camel*, spoofed ids, ...)
+        // headers are dropped except the inputs the route declares (Authorization, Cookie, Camel*, spoofed ids, ...).
+        // Camel puts HTTP headers, query and path parameters into one header map, so each route also fixes where its
+        // inputs come from.
         from("direct:order-create").routeId("order-create")
                 .process(callerIdentity)
                 .process(GatewayRoutes::requireJson)
+                // no query string: the Idempotency-Key can only be the HTTP header
+                .validate(header(Exchange.HTTP_QUERY).isNull())
                 .removeHeaders("*", IDEMPOTENCY_KEY)
                 .throttle(throttleMaxRequests).totalRequestsMode().timePeriodMillis(throttlePeriod.toMillis())
                 .correlationExpression(exchangeProperty(CallerIdentity.PARTNER_ID)).rejectExecution(true)
@@ -112,6 +121,7 @@ public class GatewayRoutes extends RouteBuilder {
 
         from("direct:order-read").routeId("order-read")
                 .process(callerIdentity)
+                // the path parameter wins over a query parameter or HTTP header named id
                 .removeHeaders("*", "id")
                 .validate(header("id").regex(UUID))
                 .bean(orderService, "read(${exchangeProperty.caller}, ${header.id})")
@@ -119,7 +129,7 @@ public class GatewayRoutes extends RouteBuilder {
 
         from("direct:audit-query").routeId("audit-query")
                 .process(callerIdentity)
-                .removeHeaders("*", "actor", "action", "limit")
+                .process(queryParameters("actor", "action", "limit"))
                 .validate(simple("${header.limit} == null || ${header.limit} regex '[1-9][0-9]{0,2}'"))
                 .validate(or(header("actor").isNull(), header("actor").regex(ACTOR)))
                 .validate(or(header("action").isNull(), header("action").regex(ACTION)))
@@ -137,6 +147,25 @@ public class GatewayRoutes extends RouteBuilder {
         from("timer:audit-anchor?period=" + anchorPeriod.toMillis()).routeId("audit-anchor")
                 .bean(auditLog, "head")
                 .log("Audit chain head: ${body}");
+    }
+
+    // Replaces all headers with the given query parameters, read from the query string: HTTP headers with the same
+    // names are ignored. A repeated parameter becomes a list, which fails validation.
+    private static Processor queryParameters(String... names) {
+        return exchange -> {
+            Message message = exchange.getMessage();
+            String query = message.getHeader(Exchange.HTTP_QUERY, String.class);
+            message.removeHeaders("*");
+            if (query != null) {
+                Map<String, List<String>> parameters = new QueryStringDecoder(query, false).parameters();
+                for (String name : names) {
+                    List<String> values = parameters.get(name);
+                    if (values != null) {
+                        message.setHeader(name, values.size() == 1 ? values.get(0) : values);
+                    }
+                }
+            }
+        };
     }
 
     // platform-http answers 415 for other media types, but lets wildcards such as application/* through

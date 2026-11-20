@@ -141,6 +141,21 @@ class AuditTrailTest extends AbstractGatewayTest {
     }
 
     /**
+     * Filters are query parameters: HTTP headers with the same names are ignored.
+     */
+    @Test
+    void filtersComeFromTheQueryOnly() {
+        List<Map<String, Object>> events = given().auth().oauth2(auditorToken())
+                .header("limit", "1")
+                .header("action", "NO_SUCH_ACTION")
+                .get("/api/audit")
+                .then().statusCode(200)
+                .extract().jsonPath().getList("$");
+
+        assertTrue(events.size() > 1, events::toString);
+    }
+
+    /**
      * Eight parallel orders all get 202 and /api/audit/verify still reports a valid chain.
      */
     @Test
