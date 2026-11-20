@@ -66,3 +66,9 @@ CREATE TRIGGER audit_event_no_update_or_delete
 CREATE TRIGGER audit_event_no_truncate
     BEFORE TRUNCATE ON audit_event
     FOR EACH STATEMENT EXECUTE FUNCTION audit_event_append_only();
+
+-- The application connects as gateway_app, which gets only what it needs. Flyway runs as the owner of the tables,
+-- so the application can neither change audit records nor drop or disable the triggers.
+GRANT SELECT, INSERT ON partner_order TO gateway_app;
+GRANT SELECT, INSERT ON audit_event TO gateway_app;
+GRANT SELECT, UPDATE ON audit_chain_head TO gateway_app;
