@@ -286,6 +286,9 @@ class OrderApiTest extends AbstractGatewayTest {
                 .header("Retry-After", matchesPattern("[0-9]+"));
         // the limit is per partner
         postOrder(acmeToken(), newKey(), ORDER).then().statusCode(202);
+        // rejections by the throttle are counted, not appended to the audit chain
+        assertTrue(audit("?action=REQUEST_REJECTED&limit=500").stream()
+                .noneMatch(event -> "ThrottlerRejectedExecutionException".equals(event.get("reason"))));
     }
 
     // the Content-Type exactly as given, REST Assured would otherwise append its default charset
